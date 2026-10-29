@@ -11,5 +11,3 @@ pub use pathref::PathRef;
 mod pathtrie;
 pub use pathtrie::PPTIter;
 pub use pathtrie::PathPrefixTree;
-
-mod serde;
