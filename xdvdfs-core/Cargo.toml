@@ -26,10 +26,9 @@ thiserror = { version = "2.0.14", default-features = false }
 log = { version = "0.4.17", optional = true }
 sha3 = { version = "0.10.8", optional = true, default-features = false }
 ciso = { version = "0.3.0", default-features = false, optional = true }
-wax = { version = "0.6.0", default-features = false, optional = true }
 
 [features]
-default = ["std", "read", "write", "logging", "checksum", "ciso_support", "remap"]
+default = ["std", "read", "write", "logging", "checksum", "ciso_support"]
 std = ["serde/std", "sha3/std"]
 read = []
 write = ["std"]
@@ -37,12 +36,10 @@ logging = ["log"]
 sync = ["maybe-async/is_sync", "ciso/sync"]
 checksum = ["sha3"]
 ciso_support = ["write", "ciso"]
-remap = ["dep:wax"]
 
 [lib]
 
 [dev-dependencies]
 rand = "0.9.3"
 futures = "0.3.28"
-serde_test = "1.0.159"
 tempfile = "3.20.0"

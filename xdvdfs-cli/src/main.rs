@@ -1,8 +1,6 @@
 use clap::Parser;
 use maybe_async::maybe_async;
 
-mod cmd_bmark;
-mod cmd_build_image;
 mod cmd_compress;
 mod cmd_info;
 mod cmd_md5;
@@ -49,10 +47,7 @@ enum Cmd {
     CopyOut(cmd_unpack::CopyOutArgs),
     Unpack(cmd_unpack::UnpackArgs),
     Pack(cmd_pack::PackArgs),
-    BuildImage(cmd_build_image::BuildImageArgs),
-    ImageSpec(cmd_build_image::ImageSpecArgs),
     Compress(cmd_compress::CompressArgs),
-    Bmark(cmd_bmark::BmarkArgs),
 
     #[command(hide = true)]
     ExtractXiso(exiso_compat::EXCommand),
@@ -70,10 +65,7 @@ async fn run_command(cmd: &Cmd) -> Result<(), anyhow::Error> {
         CopyOut(args) => cmd_unpack::cmd_copyout(args).await,
         Unpack(args) => cmd_unpack::cmd_unpack(args).await,
         Pack(args) => cmd_pack::cmd_pack(args).await,
-        BuildImage(args) => cmd_build_image::cmd_build_image(args).await,
-        ImageSpec(args) => cmd_build_image::cmd_image_spec(args).await,
         Compress(args) => cmd_compress::cmd_compress(args).await,
-        Bmark(args) => cmd_bmark::cmd_bmark(args).await,
         ExtractXiso(_) => unreachable!("should be handled before entering async context"),
     }
 }
