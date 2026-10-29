@@ -59,7 +59,7 @@ pub enum ProgressInfo<'a> {
 }
 
 #[non_exhaustive]
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum OwnedProgressInfo {
     DiscoveredDirectory(usize),
     FileCount(usize),
