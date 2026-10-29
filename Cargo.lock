@@ -907,6 +907,7 @@ dependencies = [
  "futures",
  "maybe-async",
  "md-5",
+ "tempfile",
  "xdvdfs",
 ]
 
