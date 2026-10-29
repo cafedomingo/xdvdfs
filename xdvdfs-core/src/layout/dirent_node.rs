@@ -66,14 +66,14 @@ mod test {
     fn test_layout_dirent_node_deserialize_empty_ff_filled() {
         let dirent_buf = [0xff; 0xe];
         let dirent_node = DirectoryEntryNode::deserialize(&dirent_buf, 10);
-        assert!(dirent_node.is_ok_and(|node| node == None));
+        assert!(dirent_node.is_ok_and(|node| node.is_none()));
     }
 
     #[test]
     fn test_layout_dirent_node_deserialize_empty_zero_filled() {
         let dirent_buf = [0x00; 0xe];
         let dirent_node = DirectoryEntryNode::deserialize(&dirent_buf, 10);
-        assert!(dirent_node.is_ok_and(|node| node == None));
+        assert!(dirent_node.is_ok_and(|node| node.is_none()));
     }
 
     #[test]
@@ -103,7 +103,7 @@ mod test {
     #[test]
     fn test_layout_dirent_node_name_decode_windows_1252() {
         let mut name = [0u8; 256];
-        name[0] = 'A' as u8;
+        name[0] = b'A';
         name[1] = 159; // Ÿ
 
         let node = DirectoryEntryNode {

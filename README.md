@@ -1,20 +1,18 @@
 # xdvdfs
 
+This is a fork of [antangelo/xdvdfs](https://github.com/antangelo/xdvdfs) focused on the command line tool.
+
 `xdvdfs` is a collection of tools for interacting with XDVDFS/XISO images.
 
 ## xdvdfs-cli
 
 `xdvdfs-cli` is a command line tool for interacting with xiso files.
 
-If cargo is set up correctly in the path, it can be installed with:
+Prebuilt binaries are on the [Releases page](https://github.com/cafedomingo/xdvdfs/releases). To build from source:
 
 ```sh
-cargo install xdvdfs-cli
+cargo install --git https://github.com/cafedomingo/xdvdfs xdvdfs-cli
 ```
-
-Otherwise, it can be run from the workspace root as the default project.
-
-A binary distribution of xdvdfs-cli is also available in the github releases.
 
 ### Usage
 

@@ -218,12 +218,12 @@ mod test {
                 0, 0, 0, 0,
                 1, 0, 0, 0,
                 2, 0, 0, 0,
-                0xff, 1, 'A' as u8,
+                0xff, 1, b'A',
                 0xff, // padding
                 0, 0, 0, 0,
                 1, 0, 0, 0,
                 2, 0, 0, 0,
-                0xff, 1, 'B' as u8,
+                0xff, 1, b'B',
                 0xff, // padding
             ];
             block_on(slbd.write(2048, &dirtab)).expect("write should succeed");
@@ -235,7 +235,7 @@ mod test {
                 0, 0, 0, 0,
                 1, 0, 0, 0,
                 2, 0, 0, 0,
-                0xff, 1, 'C' as u8,
+                0xff, 1, b'C',
                 0xff, // padding
             ];
             block_on(slbd.write(4096, &dirtab)).expect("write should succeed");
@@ -267,7 +267,7 @@ mod test {
                     },
                 },
                 name: name_bytes_from("A"),
-                offset: 2048 + 0x00,
+                offset: 2048,
             })
         );
 
@@ -303,7 +303,7 @@ mod test {
                     },
                 },
                 name: name_bytes_from("C"),
-                offset: 4096 + 0x00,
+                offset: 4096,
             })
         );
 
@@ -331,7 +331,7 @@ mod test {
 
         let mut dtb = AvlDirectoryEntryTableBuilder::default();
         for name in &entry_names {
-            dtb.add_file(&name, 10)
+            dtb.add_file(name, 10)
                 .expect("Dirent insertion should succeed");
         }
         let mut dtb = dtb.build().expect("Building dirtab should succeed");

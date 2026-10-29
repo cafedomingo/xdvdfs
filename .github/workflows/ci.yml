@@ -16,7 +16,7 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps: 
       - name: Checkout source
-        uses: actions/checkout@v3
+        uses: actions/checkout@v7
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source
-        uses: actions/checkout@v3
+        uses: actions/checkout@v7
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -47,7 +47,7 @@ jobs:
         run: zip -j xdvdfs-linux-${{ github.sha }}.zip LICENSE target/release/xdvdfs
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: xdvdfs-linux-${{ github.sha }}
           path: xdvdfs-linux-${{ github.sha }}.zip
@@ -57,7 +57,7 @@ jobs:
     runs-on: windows-latest
     steps: 
       - name: Checkout source
-        uses: actions/checkout@v3
+        uses: actions/checkout@v7
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -72,102 +72,26 @@ jobs:
         run: 7z a xdvdfs-windows-${{ github.sha }}.zip ./LICENSE ./target/release/xdvdfs.exe
       
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: xdvdfs-windows-${{ github.sha }}
           path: xdvdfs-windows-${{ github.sha }}.zip
 
-  build_web:
-    name: Build (web)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v3
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-
-      - name: Install Trunk
-        uses: jetli/trunk-action@v0.5.0
-        with:
-          version: 'latest'
-
-      - name: Build
-        run: trunk build --release
-        working-directory: ./xdvdfs-web
-
-      - name: Package artifact
-        run: zip xdvdfs-web-${{ github.sha }}.zip -r dist
-        working-directory: ./xdvdfs-web
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: xdvdfs-web-${{ github.sha }}
-          path: xdvdfs-web/xdvdfs-web-${{ github.sha }}.zip
-
-  build_fsd_linux:
-    name: Build for Linux (xdvdfs-fsd)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v3
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Build
-        run: cargo build -p xdvdfs-fsd --release
-
-      - name: Package artifact
-        run: zip -j xdvdfs-fsd-linux-${{ github.sha }}.zip LICENSE target/release/xdvdfsd
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: xdvdfs-fsd-linux-${{ github.sha }}
-          path: xdvdfs-fsd-linux-${{ github.sha }}.zip
-
-  build_fsd_windows:
-    name: Build for Windows (xdvdfs-fsd)
-    runs-on: windows-latest
-    steps: 
-      - name: Checkout source
-        uses: actions/checkout@v3
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Build
-        run: cargo build -p xdvdfs-fsd --release
-
-      - name: Package artifact
-        run: 7z a xdvdfs-fsd-windows-${{ github.sha }}.zip ./LICENSE ./target/release/xdvdfsd.exe
-      
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: xdvdfs-fsd-windows-${{ github.sha }}
-          path: xdvdfs-fsd-windows-${{ github.sha }}.zip
-
-
   release:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
-    needs: [build_cli_linux, build_cli_windows, build_web, build_fsd_linux]
+    needs: [build_cli_linux, build_cli_windows]
     permissions:
       contents: write
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           fetch-tags: true
 
       - name: Download artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v8
         with:
           path: out
 
@@ -176,7 +100,7 @@ jobs:
         run: git tag --sort=-version:refname | head -n 2 | tac | sed 'N;s/\n/../' | xargs git log --oneline --no-decorate | tee ${{ github.workspace }}-changelog.txt
 
       - name: Publish release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           draft: false
           prerelease: false

@@ -280,7 +280,7 @@ mod test {
     fn test_layout_dirent_name_encode_over_max_len() {
         let mut s = String::with_capacity(256);
         for i in 0..256 {
-            let x = ('a' as u8) + (i % 26) as u8;
+            let x = b'a' + (i % 26) as u8;
             s.push(x as char);
         }
 

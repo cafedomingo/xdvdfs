@@ -532,7 +532,7 @@ mod test {
     fn test_avl_tree_insert_invariants() {
         let mut rng = rngs::StdRng::seed_from_u64(0x5842_4f58_5842_4f58);
         let mut test_set: Vec<i32> = Vec::new();
-        test_set.resize_with(1000, || rng.gen());
+        test_set.resize_with(1000, || rng.random());
 
         let mut tree = AvlTree::default();
 
@@ -555,7 +555,7 @@ mod test {
     fn test_avl_tree_inorder_ordering() {
         let mut rng = rngs::StdRng::seed_from_u64(0x5842_4f58_5842_4f58);
         let mut test_set: Vec<i32> = Vec::new();
-        test_set.resize_with(1000, || rng.gen());
+        test_set.resize_with(1000, || rng.random());
 
         let mut tree = AvlTree::default();
         let mut btree = std::collections::BTreeSet::new();

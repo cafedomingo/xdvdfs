@@ -376,7 +376,7 @@ mod test {
         use crate::layout::{DirectoryEntryData, DirentAttributes};
 
         let mut data = DirectoryEntryData::new_without_sector(
-            "HelloWorld".into(),
+            "HelloWorld",
             2048,
             DirentAttributes(0).with_directory(true),
             1234,
@@ -387,7 +387,7 @@ mod test {
         data.compute_len_and_name_encoding().unwrap();
         let name_bytes = data.get_encoded_name();
 
-        let node = dirent_data_to_disk_node(&data, None, None, offsets, &name_bytes, 33)
+        let node = dirent_data_to_disk_node(&data, None, None, offsets, name_bytes, 33)
             .expect("Node should be created without error");
         assert_eq!({ node.left_entry_offset }, 0);
         assert_eq!({ node.right_entry_offset }, 0);
@@ -401,7 +401,7 @@ mod test {
         use crate::layout::{DirectoryEntryData, DirentAttributes};
 
         let mut data = DirectoryEntryData::new_without_sector(
-            "HelloWorld".into(),
+            "HelloWorld",
             2048,
             DirentAttributes(0).with_directory(true),
             1234,
@@ -412,7 +412,7 @@ mod test {
         data.compute_len_and_name_encoding().unwrap();
         let name_bytes = data.get_encoded_name();
 
-        let node = dirent_data_to_disk_node(&data, Some(1), Some(2), offsets, &name_bytes, 33)
+        let node = dirent_data_to_disk_node(&data, Some(1), Some(2), offsets, name_bytes, 33)
             .expect("Node should be created without error");
         assert_eq!({ node.left_entry_offset }, 512);
         assert_eq!({ node.right_entry_offset }, 1024);

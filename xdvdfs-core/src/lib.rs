@@ -1,4 +1,6 @@
 #![no_std]
+// async_trait 0.1.88 puts a bare #[must_use] on the trait methods it generates
+#![allow(clippy::double_must_use)]
 
 extern crate alloc;
 #[cfg(feature = "std")]

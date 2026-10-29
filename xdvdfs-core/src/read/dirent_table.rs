@@ -220,9 +220,6 @@ mod test {
         let res = table
             .dirent_search_next_offset::<()>(&dirent, "Bc")
             .expect("Dirent search should succeed");
-        let mut dirent_name = [0u8; 256];
-        dirent_name[0] = 'B' as u8;
-        dirent_name[1] = 'c' as u8;
         assert_eq!(res, DirentSearchResult::Found);
     }
 
@@ -438,15 +435,15 @@ mod test {
             0, 0, 4, 0, // Right child -> BE
             1, 0, 0, 0,
             2, 0, 0, 0,
-            0xff, 2, 'B' as u8, 'c' as u8,
+            0xff, 2, b'B', b'c',
             8, 0, 0, 0, // Left child -> Bd
             3, 0, 0, 0,
             4, 0, 0, 0,
-            0xff, 2, 'B' as u8, 'E' as u8,
+            0xff, 2, b'B', b'E',
             0, 0, 0, 0,
             5, 0, 0, 0,
             6, 0, 0, 0,
-            0xff, 2, 'B' as u8, 'd' as u8,
+            0xff, 2, b'B', b'd',
         ];
         let table = DirectoryEntryTable {
             region: DiskRegion {
@@ -457,9 +454,6 @@ mod test {
 
         let res =
             block_on(table.find_dirent(dev.as_mut_slice(), "bd")).expect("Search should succeed");
-        let mut dirent_name = [0u8; 256];
-        dirent_name[0] = 'B' as u8;
-        dirent_name[1] = 'd' as u8;
         assert_eq!(
             res,
             DirectoryEntryNode {
@@ -527,27 +521,27 @@ mod test {
             12, 0, 4, 0, // Left child -> Aa, Right child -> Bf
             1, 0, 0, 0,
             2, 0, 0, 0,
-            0xff, 2, 'B' as u8, 'c' as u8,
+            0xff, 2, b'B', b'c',
             // Offset 0x10 (4)
             8, 0, 0, 0, // Left child -> Bd
             3, 0, 0, 0,
             4, 0, 0, 0,
-            0xff, 2, 'B' as u8, 'f' as u8,
+            0xff, 2, b'B', b'f',
             // Offset 0x20 (8)
             0, 0, 16, 0, // Right child -> Be
             5, 0, 0, 0,
             6, 0, 0, 0,
-            0xff, 2, 'B' as u8, 'd' as u8,
+            0xff, 2, b'B', b'd',
             // Offset 0x30 (12)
             0, 0, 0, 0,
             7, 0, 0, 0,
             8, 0, 0, 0,
-            0xff, 2, 'A' as u8, 'a' as u8,
+            0xff, 2, b'A', b'a',
             // Offset 0x40 (16)
             0xff, 0xff, 0xff, 0xff,
             9, 0, 0, 0,
             10, 0, 0, 0,
-            0xff, 2, 'B' as u8, 'e' as u8,
+            0xff, 2, b'B', b'e',
         ];
         let table = DirectoryEntryTable {
             region: DiskRegion {
@@ -621,15 +615,15 @@ mod test_with_write {
                 0, 0, 4, 0, // Right child -> BE
                 sector + 1, 0, 0, 0,
                 0, 8, 0, 0,
-                0xff, 2, first_char as u8, 'c' as u8,
+                0xff, 2, first_char as u8, b'c',
                 8, 0, 0, 0, // Left child -> Bd
                 sector + 1, 0, 0, 0,
                 0, 8, 0, 0,
-                0xff, 2, first_char as u8, 'E' as u8,
+                0xff, 2, first_char as u8, b'E',
                 0, 0, 0, 0,
                 sector + 1, 0, 0, 0,
                 0, 8, 0, 0,
-                0xff, 2, first_char as u8, 'd' as u8,
+                0xff, 2, first_char as u8, b'd',
             ];
 
             block_on(slbd.write(sector as u64 * SECTOR_SIZE_U64, &table_bytes))
@@ -651,9 +645,6 @@ mod test_with_write {
 
         let res =
             block_on(table.walk_path(&mut dev, "/Bd/CE/Ac")).expect("Path walk should succeed");
-        let mut dirent_name = [0u8; 256];
-        dirent_name[0] = 'A' as u8;
-        dirent_name[1] = 'c' as u8;
         assert_eq!(
             res,
             DirectoryEntryNode {

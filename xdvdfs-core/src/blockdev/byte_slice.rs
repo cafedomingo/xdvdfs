@@ -85,38 +85,38 @@ mod test {
 
     #[test]
     fn test_blockdev_byte_slice_write_offset_out_of_range() {
-        let mut bytes = [1, 2, 3, 4, 5];
+        let bytes = [1, 2, 3, 4, 5];
         let mut buffer = [0u8; 100];
 
-        let res = block_on(buffer.as_mut_slice().write(105, &mut bytes));
+        let res = block_on(buffer.as_mut_slice().write(105, &bytes));
         assert_eq!(res, Err(ByteSliceOutOfBounds));
     }
 
     #[test]
     fn test_blockdev_byte_slice_write_size_out_of_range() {
-        let mut bytes = [1, 2, 3, 4, 5];
+        let bytes = [1, 2, 3, 4, 5];
         let mut buffer = [0u8; 100];
 
-        let res = block_on(buffer.as_mut_slice().write(98, &mut bytes));
+        let res = block_on(buffer.as_mut_slice().write(98, &bytes));
         assert_eq!(res, Err(ByteSliceOutOfBounds));
     }
 
     #[test]
     fn test_blockdev_byte_slice_write_in_bounds() {
-        let mut bytes = [1, 2, 3, 4, 5];
+        let bytes = [1, 2, 3, 4, 5];
         let mut buffer = [0u8; 100];
 
-        let res = block_on(buffer.as_mut_slice().write(50, &mut bytes));
+        let res = block_on(buffer.as_mut_slice().write(50, &bytes));
         assert_eq!(res, Ok(()));
         assert_eq!(buffer[50..55], [1, 2, 3, 4, 5]);
     }
 
     #[test]
     fn test_blockdev_byte_slice_write_len() {
-        let mut bytes = [1, 2, 3, 4, 5];
+        let bytes = [1, 2, 3, 4, 5];
         let mut buffer = [0u8; 100];
 
-        let res = block_on(buffer.as_mut_slice().write(50, &mut bytes));
+        let res = block_on(buffer.as_mut_slice().write(50, &bytes));
         assert_eq!(res, Ok(()));
         assert_eq!(buffer[50..55], [1, 2, 3, 4, 5]);
 
@@ -127,10 +127,10 @@ mod test {
 
     #[test]
     fn test_blockdev_byte_slice_write_boxed_in_bounds() {
-        let mut bytes = [1, 2, 3, 4, 5];
+        let bytes = [1, 2, 3, 4, 5];
         let mut buffer = alloc::boxed::Box::new([0u8; 100]);
 
-        let res = block_on(buffer.write(50, &mut bytes));
+        let res = block_on(buffer.write(50, &bytes));
         assert_eq!(res, Ok(()));
         assert_eq!(buffer[50..55], [1, 2, 3, 4, 5]);
 

@@ -58,15 +58,14 @@ mod test {
     fn test_read_dirent_node_from_disk_valid_dirent() {
         let data: &mut [u8] = &mut [
             0x2e, 0x2e, 0x2e, 0x2e, // padding for offset
-            0x1, 0x1, 0x2, 0x2, 0x1, 0x0, 0x0, 0x0, 0x2, 0x0, 0x0, 0x0, 0xff, 0x2, 'A' as u8,
-            'b' as u8,
+            0x1, 0x1, 0x2, 0x2, 0x1, 0x0, 0x0, 0x0, 0x2, 0x0, 0x0, 0x0, 0xff, 0x2, b'A', b'b',
         ];
 
         let res = block_on(DirectoryEntryNode::read_from_disk(data, 4))
             .expect("Read/deserialize should not fail");
         let mut dirent_name = [0u8; 256];
-        dirent_name[0] = 'A' as u8;
-        dirent_name[1] = 'b' as u8;
+        dirent_name[0] = b'A';
+        dirent_name[1] = b'b';
 
         assert_eq!(
             res,

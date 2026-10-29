@@ -20,8 +20,6 @@ pub use remap::*;
 pub use sector_linear::*;
 pub use xdvdfs::*;
 
-#[cfg(not(target_family = "wasm"))]
 mod stdfs;
 
-#[cfg(not(target_family = "wasm"))]
 pub use stdfs::*;

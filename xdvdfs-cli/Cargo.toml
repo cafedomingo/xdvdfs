@@ -2,7 +2,6 @@
 name = "xdvdfs-cli"
 description = "Tool for interacting with XISO/XDVDFS images"
 keywords = ["cli", "filesystem", "xdvdfs"]
-readme = "README.md"
 default-run = "xdvdfs"
 
 version.workspace = true
@@ -10,6 +9,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+publish.workspace = true
 
 exclude = ["**/*.iso", "**/*.xiso"]
 
