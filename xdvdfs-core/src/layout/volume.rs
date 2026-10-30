@@ -1,23 +1,13 @@
-use bincode::Options;
-use serde::{Deserialize, Serialize};
-use serde_big_array::BigArray;
-
-use super::DirectoryEntryTable;
+use super::{DirectoryEntryTable, DiskRegion, SECTOR_SIZE_USZ};
 
 pub const VOLUME_HEADER_MAGIC: [u8; 0x14] = *b"MICROSOFT*XBOX*MEDIA";
 
 /// XDVDFS volume information, located at sector 32 on the disk
-#[repr(C)]
-#[repr(packed)]
-#[derive(Deserialize, Serialize, Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub struct VolumeDescriptor {
     magic0: [u8; 0x14],
     pub root_table: DirectoryEntryTable,
     pub filetime: u64,
-
-    #[serde(with = "BigArray")]
-    unused: [u8; 0x7c8],
-
     magic1: [u8; 0x14],
 }
 
@@ -27,7 +17,6 @@ impl VolumeDescriptor {
             magic0: VOLUME_HEADER_MAGIC,
             root_table,
             filetime: 0,
-            unused: [0; 0x7c8],
             magic1: VOLUME_HEADER_MAGIC,
         }
     }
@@ -36,18 +25,24 @@ impl VolumeDescriptor {
         self.magic0 == VOLUME_HEADER_MAGIC && self.magic1 == VOLUME_HEADER_MAGIC
     }
 
-    pub fn serialize(&self) -> Result<Vec<u8>, bincode::Error> {
-        bincode::DefaultOptions::new()
-            .with_fixint_encoding()
-            .with_little_endian()
-            .serialize(self)
+    pub fn from_bytes(buf: &[u8; SECTOR_SIZE_USZ]) -> Self {
+        Self {
+            magic0: buf[0..0x14].try_into().unwrap(),
+            root_table: DirectoryEntryTable {
+                region: DiskRegion::from_bytes(buf[0x14..0x1c].try_into().unwrap()),
+            },
+            filetime: u64::from_le_bytes(buf[0x1c..0x24].try_into().unwrap()),
+            magic1: buf[0x7ec..0x800].try_into().unwrap(),
+        }
     }
 
-    pub fn deserialize(buf: &[u8; 0x800]) -> Result<Self, bincode::Error> {
-        bincode::DefaultOptions::new()
-            .with_fixint_encoding()
-            .with_little_endian()
-            .deserialize(buf)
+    pub fn to_bytes(&self) -> [u8; SECTOR_SIZE_USZ] {
+        let mut buf = [0; SECTOR_SIZE_USZ];
+        buf[0..0x14].copy_from_slice(&self.magic0);
+        buf[0x14..0x1c].copy_from_slice(&self.root_table.region.to_bytes());
+        buf[0x1c..0x24].copy_from_slice(&self.filetime.to_le_bytes());
+        buf[0x7ec..0x800].copy_from_slice(&self.magic1);
+        buf
     }
 }
 
@@ -90,42 +85,23 @@ mod test {
     }
 
     #[test]
-    fn test_layout_volume_serialize() {
-        let root_table = DirectoryEntryTable {
+    fn test_layout_volume_bytes_roundtrip() {
+        let mut bytes = [0u8; 0x800];
+        bytes[0..0x14].copy_from_slice(&VOLUME_HEADER_MAGIC);
+        bytes[0x7ec..0x800].copy_from_slice(&VOLUME_HEADER_MAGIC);
+        bytes[0x14] = 10;
+        bytes[0x18] = 20;
+        bytes[0x1c] = 30;
+
+        let mut volume = VolumeDescriptor::new(DirectoryEntryTable {
             region: DiskRegion {
-                size: 10,
-                sector: 20,
+                sector: 10,
+                size: 20,
             },
-        };
+        });
+        volume.filetime = 30;
 
-        let volume = VolumeDescriptor::new(root_table);
-        assert!(volume.is_valid());
-
-        let serialized = volume.serialize().expect("Serialization should succeed");
-        assert_eq!(serialized[0..0x14], VOLUME_HEADER_MAGIC);
-        assert_eq!(
-            u32::from_le_bytes(serialized[0x14..0x18].try_into().unwrap()),
-            20
-        );
-        assert_eq!(
-            u32::from_le_bytes(serialized[0x18..0x1C].try_into().unwrap()),
-            10
-        );
-        assert_eq!(serialized[0x7ec..0x800], VOLUME_HEADER_MAGIC);
-    }
-
-    #[test]
-    fn test_layout_volume_deserialize() {
-        let mut volume = [0u8; 0x800];
-        volume[0..0x14].copy_from_slice(&VOLUME_HEADER_MAGIC);
-        volume[0x7ec..0x800].copy_from_slice(&VOLUME_HEADER_MAGIC);
-        volume[0x14] = 10;
-        volume[0x18] = 20;
-
-        let volume =
-            VolumeDescriptor::deserialize(&volume).expect("Deserialization should succeed");
-        assert!(volume.is_valid());
-        assert_eq!({ volume.root_table.region.sector }, 10);
-        assert_eq!({ volume.root_table.region.size }, 20);
+        assert_eq!(VolumeDescriptor::from_bytes(&bytes), volume);
+        assert_eq!(volume.to_bytes(), bytes);
     }
 }

@@ -55,7 +55,7 @@ fn create_dirent_tables<'a>(
         // Store index of directory in dirent_tables in the dtab_size_map,
         // then pass it through the dirtab writer so it can be used as to look-up
         // sectors in the forward pass.
-        let dtw = dirtab.build()?;
+        let dtw = dirtab.build();
 
         dtab_size_map[dir_idx] = dtw.dirtab_size();
         dirent_tables.push((path, dtw));
@@ -91,10 +91,7 @@ where
     ) -> crate::Result<()> {
         // FIXME: Set timestamp
         let root_table = layout::DirectoryEntryTable::new(root_dirtab_size, root_dirtab_sector);
-        let volume_info = layout::VolumeDescriptor::new(root_table);
-        let volume_info = volume_info
-            .serialize()
-            .map_err(|_| Error::SerializationFailed)?;
+        let volume_info = layout::VolumeDescriptor::new(root_table).to_bytes();
         self.image
             .write(32 * layout::SECTOR_SIZE as u64, &volume_info)?;
         Ok(())

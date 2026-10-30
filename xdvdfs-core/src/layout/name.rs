@@ -1,3 +1,5 @@
+use encoding_rs::{EncoderResult, WINDOWS_1252};
+
 pub fn cmp_ignore_case_utf8(a: &str, b: &str) -> core::cmp::Ordering {
     use core::cmp::Ordering;
 
@@ -34,78 +36,50 @@ pub fn is_safe_name(name: &str) -> bool {
     !matches!(name, "" | "." | "..") && !name.contains(['/', '\\', ':', '\0'])
 }
 
-// When building a directory entry table, comparisons between entries
-// is done by the name string with upper-case characters. When serializing,
-// we no longer need to perform comparisons, but do need the serialized
-// name, so we reuse the space.
-#[derive(Copy, Clone, Debug, Hash)]
-enum DirentNameStored {
-    WithUpperCase([u8; 255]),
-    WithEncoding([u8; 255], u8),
+/// A name's length is stored in a byte
+const MAX_NAME_LEN: usize = u8::MAX as usize;
+
+/// Why a name can't be stored in a directory entry
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum NameError {
+    /// Longer than 255 bytes in Windows-1252
+    TooLong,
+    /// Has a character that Windows-1252 lacks
+    NotEncodable,
 }
 
 #[derive(Copy, Clone, Debug, Hash)]
 pub struct DirentName<'alloc> {
     name: &'alloc str,
-    name_inner: DirentNameStored,
+    encoded: [u8; MAX_NAME_LEN],
+    encoded_len: u8,
 }
 
 impl<'alloc> DirentName<'alloc> {
-    pub fn new(name: &'alloc str) -> Self {
-        // Truncate for the purpose of comparison,
-        // but keep full name for encoding.
-        let name_len = core::cmp::min(name.len(), 255);
+    pub fn new(name: &'alloc str) -> Result<Self, NameError> {
+        let mut encoded = [0; MAX_NAME_LEN];
+        let (result, _, encoded_len) = WINDOWS_1252
+            .new_encoder()
+            .encode_from_utf8_without_replacement(name, &mut encoded, true);
+        match result {
+            EncoderResult::InputEmpty => {}
+            EncoderResult::OutputFull => return Err(NameError::TooLong),
+            EncoderResult::Unmappable(_) => return Err(NameError::NotEncodable),
+        }
 
-        // UTF-8 alignment check is desirable here
-        #[allow(clippy::sliced_string_as_bytes)]
-        let name_bytes = name[..name_len].as_bytes();
-
-        let mut name_inner = [0u8; 255];
-        name_inner[..name_len].copy_from_slice(name_bytes);
-
-        // SAFETY: name_bytes was just copied from a UTF-8 str
-        let name_inner_str =
-            unsafe { core::str::from_utf8_unchecked_mut(&mut name_inner[..name_len]) };
-        name_inner_str.make_ascii_uppercase();
-
-        let name_inner = DirentNameStored::WithUpperCase(name_inner);
-        Self { name, name_inner }
+        Ok(Self {
+            name,
+            encoded,
+            encoded_len: encoded_len as u8,
+        })
     }
 
     pub fn get_name(&self) -> &str {
         self.name
     }
 
-    /// Returns the length of the name in Windows-1252, or `None` if it has a
-    /// character Windows-1252 lacks or doesn't fit in 255 bytes of it
-    pub fn set_encode_name(&mut self) -> Option<u8> {
-        use encoding_rs::EncoderResult;
-
-        if let DirentNameStored::WithEncoding(_, size) = self.name_inner {
-            return Some(size);
-        }
-
-        let mut buffer = [0u8; 255];
-        let mut encoder = encoding_rs::WINDOWS_1252.new_encoder();
-
-        let (result, bytes_read, bytes_written) =
-            encoder.encode_from_utf8_without_replacement(self.name, &mut buffer, true);
-        if result != EncoderResult::InputEmpty {
-            return None;
-        }
-
-        assert!(bytes_written <= 255);
-        self.name_inner = DirentNameStored::WithEncoding(buffer, bytes_written as u8);
-
-        assert_eq!(bytes_read, self.name.len());
-        Some(bytes_written as u8)
-    }
-
     pub fn get_encoded_name(&self) -> &[u8] {
-        match &self.name_inner {
-            DirentNameStored::WithEncoding(buf, len) => &buf[..(*len as usize)],
-            _ => unreachable!("Must call set_encoded_name before get!"),
-        }
+        &self.encoded[..self.encoded_len as usize]
     }
 }
 
@@ -124,31 +98,16 @@ impl PartialOrd for DirentName<'_> {
 }
 
 impl Ord for DirentName<'_> {
+    // Readers search tables with the same comparator
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        // If comparing serialized names, fall back to character-by-character
-        // comparison.
-        let DirentNameStored::WithUpperCase(self_name) = &self.name_inner else {
-            // TODO: Annotate with `cold_path()` once it is stabilized
-            return cmp_ignore_case_utf8(self.name, other.name);
-        };
-
-        let DirentNameStored::WithUpperCase(other_name) = &other.name_inner else {
-            return cmp_ignore_case_utf8(self.name, other.name);
-        };
-
-        // SAFETY: WithUpperCase is constructed with a UTF-8 str
-        // FIXME: Slice names by actual length
-        let self_name = unsafe { core::str::from_utf8_unchecked(self_name) };
-        let other_name = unsafe { core::str::from_utf8_unchecked(other_name) };
-
-        self_name.cmp(other_name)
+        cmp_ignore_case_utf8(self.name, other.name)
     }
 }
 
 #[cfg(test)]
 fn name_comparator_wrapper(a: &str, b: &str) -> core::cmp::Ordering {
-    let a = DirentName::new(a);
-    let b = DirentName::new(b);
+    let a = DirentName::new(a).unwrap();
+    let b = DirentName::new(b).unwrap();
     a.cmp(&b)
 }
 
@@ -210,6 +169,15 @@ macro_rules! case_cmp_test {
                     ]
                 );
             }
+
+            #[test]
+            fn test_str_ignore_case_beyond_ascii() {
+                // `Œ` is 0x8c in Windows-1252, but U+0152 sorts after `é`
+                let mut strings = ["Œuvre", "école", "zeta"];
+                strings.sort_by($cmp);
+
+                assert_eq!(strings, ["zeta", "école", "Œuvre"]);
+            }
         }
     };
 }
@@ -223,68 +191,46 @@ case_cmp_test!(test_layout_dirent_name_cmp, |a, b| {
 
 #[cfg(test)]
 mod test {
-    use super::DirentName;
+    use super::{DirentName, NameError};
 
     #[test]
     fn test_layout_dirent_name_eq() {
-        let n1 = DirentName::new("a");
-        let n2 = DirentName::new("A");
+        let n1 = DirentName::new("a").unwrap();
+        let n2 = DirentName::new("A").unwrap();
 
         assert_eq!(n1, n2);
         assert_eq!(n1.partial_cmp(&n2), Some(core::cmp::Ordering::Equal));
     }
 
     #[test]
-    fn test_layout_dirent_name_fallback_cmp() {
-        let mut n1 = DirentName::new("abcd");
-        let mut n2 = DirentName::new("ABCD");
-        let mut n3 = DirentName::new("aBcD");
-
-        assert_eq!(n1, n2);
-        assert_eq!(n2, n3);
-        n1.set_encode_name().expect("Encoding n1 should succeed");
-        assert_eq!(n1, n2);
-        assert_eq!(n2, n3);
-        n3.set_encode_name().expect("Encoding n3 should succeed");
-        assert_eq!(n1, n2);
-        assert_eq!(n2, n3);
-        n2.set_encode_name().expect("Encoding n2 should succeed");
-        assert_eq!(n1, n2);
-        assert_eq!(n2, n3);
-    }
-
-    #[test]
     fn test_layout_dirent_name_encode_max_len() {
-        let mut s = String::with_capacity(255);
-        for _ in 0..255 {
-            s.push('a');
-        }
-
-        let mut name = DirentName::new(&s);
-        let res = name.set_encode_name();
-        assert_eq!(res, Some(255));
-
-        let res = name.set_encode_name();
-        assert_eq!(res, Some(255));
+        let name = "a".repeat(255);
+        let name = DirentName::new(&name).unwrap();
+        assert_eq!(name.get_encoded_name(), [b'a'; 255]);
     }
 
     #[test]
     fn test_layout_dirent_name_encode_over_max_len() {
-        let mut s = String::with_capacity(256);
-        for i in 0..256 {
-            let x = b'a' + (i % 26) as u8;
-            s.push(x as char);
-        }
+        assert_eq!(DirentName::new(&"a".repeat(256)), Err(NameError::TooLong));
+    }
 
-        let mut name = DirentName::new(&s);
-        let res = name.set_encode_name();
-        assert_eq!(res, None);
+    #[test]
+    fn test_layout_dirent_name_max_len_is_encoded_len() {
+        let name = "é".repeat(255);
+        let name = DirentName::new(&name).unwrap();
+        assert_eq!(name.get_encoded_name(), [0xe9; 255]);
+        assert_eq!(DirentName::new(&"é".repeat(256)), Err(NameError::TooLong));
+    }
+
+    #[test]
+    fn test_layout_dirent_name_long_names_differ_past_255_utf8_bytes() {
+        let prefix = "é".repeat(128);
+        let (a, b) = (format!("{prefix}a"), format!("{prefix}b"));
+        assert!(DirentName::new(&a).unwrap() < DirentName::new(&b).unwrap());
     }
 
     #[test]
     fn test_layout_dirent_name_encode_invalid_char() {
-        let mut name = DirentName::new("😀");
-        let res = name.set_encode_name();
-        assert_eq!(res, None);
+        assert_eq!(DirentName::new("😀"), Err(NameError::NotEncodable));
     }
 }

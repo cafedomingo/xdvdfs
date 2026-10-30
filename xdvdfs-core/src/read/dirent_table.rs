@@ -657,8 +657,7 @@ mod test {
                     filename_length: 1,
                 },
             };
-            dir.serialize_into(&mut dev[16 * index..])
-                .expect("Serializing dirent should succeed");
+            dev[16 * index..][..0xe].copy_from_slice(&dir.to_bytes());
             dev[16 * index + 0xe] = name;
             dev[sector as usize * 2048..][..file.len()].copy_from_slice(&file);
         }

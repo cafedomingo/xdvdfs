@@ -88,7 +88,7 @@ pub fn cmd_tree(args: &TreeArgs) -> anyhow::Result<()> {
             total_size += file.node.dirent.data.size as usize;
             file_count += 1;
 
-            println!("{} ({} bytes)", path, { file.node.dirent.data.size });
+            println!("{} ({} bytes)", path, file.node.dirent.data.size);
         }
     }
 

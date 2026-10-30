@@ -1,19 +1,29 @@
-use serde::{Deserialize, Serialize};
-
 use super::SECTOR_SIZE_U64;
 use crate::Error;
 
 /// Represents a contiguous region on the disk image, given by sector number and
 /// size.
-#[repr(C)]
-#[repr(packed)]
-#[derive(Deserialize, Serialize, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct DiskRegion {
     pub sector: u32,
     pub size: u32,
 }
 
 impl DiskRegion {
+    pub fn from_bytes(buf: &[u8; 8]) -> Self {
+        Self {
+            sector: u32::from_le_bytes(buf[0..4].try_into().unwrap()),
+            size: u32::from_le_bytes(buf[4..8].try_into().unwrap()),
+        }
+    }
+
+    pub fn to_bytes(&self) -> [u8; 8] {
+        let mut buf = [0; 8];
+        buf[0..4].copy_from_slice(&self.sector.to_le_bytes());
+        buf[4..8].copy_from_slice(&self.size.to_le_bytes());
+        buf
+    }
+
     pub fn is_empty(&self) -> bool {
         self.size == 0
     }
@@ -44,7 +54,7 @@ mod test {
             size: 0,
         };
 
-        assert_eq!({ region.size }, 0);
+        assert_eq!(region.size, 0);
         assert!(region.is_empty());
     }
 
@@ -55,7 +65,7 @@ mod test {
             size: 10,
         };
 
-        assert_eq!({ region.size }, 10);
+        assert_eq!(region.size, 10);
         assert!(!region.is_empty());
     }
 
