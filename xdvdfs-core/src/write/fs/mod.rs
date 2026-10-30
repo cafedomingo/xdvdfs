@@ -8,11 +8,13 @@ pub use copier::*;
 pub use hierarchy::*;
 
 // Filesystem implementations
+mod media_patch;
 #[cfg(test)]
 mod memory;
 mod sector_linear;
 mod xdvdfs;
 
+pub use media_patch::*;
 #[cfg(test)]
 pub use memory::*;
 pub use sector_linear::*;

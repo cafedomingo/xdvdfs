@@ -15,6 +15,7 @@ use tempfile::tempdir;
 use xdvdfs::blockdev::XDVDFSOffsets;
 use xdvdfs::layout::DirectoryEntryDiskNode;
 use xdvdfs::read::DATA_CHUNK_LEN;
+use xdvdfs::xbe::{MEDIA_CHECK, MEDIA_CHECK_PATCH};
 
 // 0xe header bytes plus the name make 32-byte dirents, so table sizes
 // land on sector and offset boundaries.
@@ -41,6 +42,9 @@ const CSO_ALIGNMENT: u32 = 2;
 /// which read it with ciso 0.3.0
 const CISO_FIXTURE_CHECKSUM: &str =
     "30b8ec9b15eb469578d0220ff18714b96f5c41327c1ca29c0a313df580a8a014";
+const MEDIA_CHECK_AT: usize = 5000;
+/// Unlike `default.xbe`'s, so serving one XBE's patched bytes for the other fails
+const GAME_XBE_MEDIA_CHECK_AT: usize = 3000;
 
 fn numbered(i: usize) -> String {
     format!("{i:0NAME_LEN$}")
@@ -686,6 +690,86 @@ fn compress_dot_source() {
         &["compress".as_ref(), ".".as_ref(), "../out.cso".as_ref()],
     ));
     assert!(work.path().join("out.1.cso").exists());
+}
+
+/// `MEDIA_CHECK` at `at`, ending in `jump`, then `SECTOR_LEN` zero bytes
+fn with_media_check(at: usize, jump: u8) -> Vec<u8> {
+    let mut data = vec![0; at + SECTOR_LEN];
+    data[at..][..MEDIA_CHECK.len()].copy_from_slice(&MEDIA_CHECK);
+    data[at + MEDIA_CHECK.len() - 1] = jump;
+    data
+}
+
+/// Writes `default.xbe`, `GAME.XBE` and `other.bin` to `src`, each with the
+/// media check, and returns their names and contents once media-patched.
+fn media_check_tree(src: &Path) -> [(&'static str, Vec<u8>); 3] {
+    let jge = MEDIA_CHECK[MEDIA_CHECK.len() - 1];
+    let files = [
+        ("default.xbe", MEDIA_CHECK_AT, MEDIA_CHECK_PATCH),
+        ("GAME.XBE", GAME_XBE_MEDIA_CHECK_AT, MEDIA_CHECK_PATCH),
+        ("other.bin", MEDIA_CHECK_AT, jge),
+    ];
+    let unpatched = files.map(|(name, at, _)| (name, with_media_check(at, jge)));
+    let unpatched = unpatched
+        .each_ref()
+        .map(|(name, data)| (*name, data.as_slice()));
+    write_tree(src, &unpatched, &[]);
+    files.map(|(name, at, jump)| (name, with_media_check(at, jump)))
+}
+
+#[test]
+fn pack_media_patch() {
+    let work = tempdir().unwrap();
+    let src = work.path().join("src");
+    let expected = media_check_tree(&src);
+
+    let plain = work.path().join("plain.xiso");
+    pack(&src, &plain);
+    assert_unpacks_to(&plain, &src);
+
+    for (i, source) in [&src, &plain].into_iter().enumerate() {
+        let img = work.path().join(format!("patched{i}.xiso"));
+        run(&[
+            "pack".as_ref(),
+            "--media-patch".as_ref(),
+            source.as_ref(),
+            img.as_ref(),
+        ]);
+        let out = tempdir().unwrap();
+        unpack(&img, out.path());
+        for (name, data) in &expected {
+            assert!(
+                fs::read(out.path().join(name)).unwrap() == *data,
+                "{name} packed from {}",
+                source.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn compress_media_patch() {
+    let work = tempdir().unwrap();
+    let src = work.path().join("src");
+    let expected = media_check_tree(&src);
+    let cso = work.path().join("out.cso");
+    run(&[
+        "compress".as_ref(),
+        "--media-patch".as_ref(),
+        src.as_ref(),
+        cso.as_ref(),
+    ]);
+
+    let out = xdvdfs(&["md5".as_ref(), work.path().join("out.1.cso").as_ref()]);
+    assert_success(&out);
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    for (name, data) in &expected {
+        let line = format!("{}  /{name}", md5_hex(data));
+        assert!(
+            stdout.lines().any(|printed| printed == line),
+            "md5 printed:\n{stdout}"
+        );
+    }
 }
 
 #[test]
