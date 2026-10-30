@@ -368,11 +368,11 @@ pub fn write<W: Write + Seek>(
 mod test {
     use std::io::{self, Cursor, ErrorKind};
 
-    use rand::{rngs::StdRng, RngCore, SeedableRng};
+    use rand::{Rng, SeedableRng, rngs::StdRng};
 
     use super::{
-        write, CsoReader, ALIGNMENT, BLOCK_LEN, BLOCK_LEN_USZ, COMPRESSED, HEADER_LEN,
-        HEADER_LEN_USZ, LEN_PREFIX, MAGIC, PART_PAD, VERSION,
+        ALIGNMENT, BLOCK_LEN, BLOCK_LEN_USZ, COMPRESSED, CsoReader, HEADER_LEN, HEADER_LEN_USZ,
+        LEN_PREFIX, MAGIC, PART_PAD, VERSION, write,
     };
     use crate::blockdev::BlockDeviceRead;
 
@@ -470,7 +470,10 @@ mod test {
     }
 
     fn lz4(data: &[u8]) -> Vec<u8> {
-        lz4_flex::block::compress(data)
+        let mut compressed = vec![0; lz4_flex::block::get_maximum_output_size(data.len())];
+        let len = lz4_flex::block::compress_into(data, &mut compressed).unwrap();
+        compressed.truncate(len);
+        compressed
     }
 
     /// A one-part CSO of `blocks`, each whether it is compressed and its bytes

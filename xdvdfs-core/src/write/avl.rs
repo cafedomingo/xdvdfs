@@ -154,16 +154,12 @@ impl<T: Ord> AvlTree<T> {
         let parent = node.parent?;
         let parent_node = &self.tree[parent];
 
-        if let Some(idx) = parent_node.left_node {
-            if idx == node_idx {
-                return Some((parent, AvlDirection::Left));
-            }
+        if parent_node.left_node == Some(node_idx) {
+            return Some((parent, AvlDirection::Left));
         }
 
-        if let Some(idx) = parent_node.right_node {
-            if idx == node_idx {
-                return Some((parent, AvlDirection::Right));
-            }
+        if parent_node.right_node == Some(node_idx) {
+            return Some((parent, AvlDirection::Right));
         }
 
         unreachable!("AVL node-parent invariant violated");
@@ -330,10 +326,11 @@ impl<T: Ord> AvlTree<T> {
     }
 
     fn rebalance(&mut self, leaf: usize) {
-        assert!(self
-            .tree
-            .get(leaf)
-            .is_some_and(|node| node.left_node.is_none() && node.right_node.is_none()));
+        assert!(
+            self.tree
+                .get(leaf)
+                .is_some_and(|node| node.left_node.is_none() && node.right_node.is_none())
+        );
 
         let mut current_idx = Some((leaf, AvlDirection::Leaf));
         let mut prev_idx: Option<(usize, AvlDirection)> = None;
@@ -516,7 +513,7 @@ impl<'tree, T: Ord> core::iter::Iterator for AvlPreorderIter<'tree, T> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use rand::{prelude::*, rngs, SeedableRng};
+    use rand::{SeedableRng, prelude::*, rngs};
 
     #[test]
     fn test_avl_tree_insert_invariants() {

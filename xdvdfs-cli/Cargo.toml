@@ -6,6 +6,7 @@ default-run = "xdvdfs"
 
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
@@ -13,16 +14,19 @@ publish.workspace = true
 
 exclude = ["**/*.iso", "**/*.xiso"]
 
+[lints]
+workspace = true
+
 [dependencies]
 xdvdfs = { path = "../xdvdfs-core", version = "0.9.0" }
-clap = { version = "4.2.1", features = ["derive"] }
-md-5 = { version = "0.10.5", default-features = false }
-anyhow = "1.0.71"
-env_logger = "0.10.0"
+clap = { version = "4.6.7", features = ["derive"] }
+md-5 = { version = "0.11.0", default-features = false }
+anyhow = "1.0.104"
+env_logger = { version = "0.11.11", default-features = false }
 
 [[bin]]
 name = "xdvdfs"
 path = "src/main.rs"
 
 [dev-dependencies]
-tempfile = "3.20.0"
+tempfile = "3.27.0"

@@ -31,9 +31,11 @@ fn md5_file_dirent<BDR: BlockDeviceRead + ?Sized>(
                 err.in_file(path.clone())
             }
         })?;
-    let result = hasher.finalize();
-
-    Ok(format!("{result:x}"))
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
 
 fn md5_file_tree<BDR: BlockDeviceRead + ?Sized>(

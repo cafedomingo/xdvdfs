@@ -37,6 +37,13 @@ fn numbered(i: usize) -> String {
     format!("{i:0NAME_LEN$}")
 }
 
+fn md5_hex(data: &[u8]) -> String {
+    Md5::digest(data)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 fn run(args: &[&OsStr]) {
     assert_success(&xdvdfs(args));
 }
@@ -297,7 +304,7 @@ fn md5_file_larger_than_one_chunk() {
     actual.sort();
     let mut expected: Vec<String> = files
         .iter()
-        .map(|(name, data)| format!("{:x}  /{name}", Md5::digest(data)))
+        .map(|(name, data)| format!("{}  /{name}", md5_hex(data)))
         .collect();
     expected.sort();
     assert_eq!(actual, expected);
@@ -325,7 +332,7 @@ fn md5_subdirectory_paths() {
         "md5 printed:\n{stdout}"
     );
 
-    let nested = format!("{:x}  /sub/x/f", Md5::digest(b"f"));
+    let nested = format!("{}  /sub/x/f", md5_hex(b"f"));
     assert!(
         stdout.lines().any(|line| line == nested),
         "md5 printed:\n{stdout}"

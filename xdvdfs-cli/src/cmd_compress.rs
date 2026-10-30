@@ -13,12 +13,12 @@ use xdvdfs::write::{
         DefaultCopier, FilesystemCopier, FilesystemHierarchy, SectorLinearBlockDevice,
         SectorLinearBlockFilesystem, SectorLinearImage, StdFilesystem, XDVDFSFilesystem,
     },
-    img::{create_xdvdfs_image, ProgressInfo},
+    img::{ProgressInfo, create_xdvdfs_image},
 };
 
 use crate::cmd_pack::default_image_path;
 use crate::img::{absolute_path, open_image_raw};
-use crate::split::{SplitOutput, FATX_SPLIT_SIZE};
+use crate::split::{FATX_SPLIT_SIZE, SplitOutput};
 
 #[derive(Args)]
 #[command(about = "Pack and compress an image from a given directory or source ISO image")]

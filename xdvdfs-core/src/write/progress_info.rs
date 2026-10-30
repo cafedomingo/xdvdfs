@@ -1,14 +1,13 @@
 use super::fs::ImagePath;
 
-#[allow(unused_variables)]
 pub trait ProgressVisitor {
-    fn directory_discovered(&mut self, num_entries: usize) {}
+    fn directory_discovered(&mut self, _num_entries: usize) {}
 
-    fn entry_counts(&mut self, file_count: usize, dir_count: usize) {}
+    fn entry_counts(&mut self, _file_count: usize, _dir_count: usize) {}
 
-    fn directory_added(&mut self, path: &ImagePath, sector: u64) {}
+    fn directory_added(&mut self, _path: &ImagePath, _sector: u64) {}
 
-    fn file_added(&mut self, path: &ImagePath, sector: u64) {}
+    fn file_added(&mut self, _path: &ImagePath, _sector: u64) {}
 
     fn finished_copying_image_data(&mut self) {}
 

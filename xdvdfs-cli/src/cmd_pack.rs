@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use clap::Args;
 use xdvdfs::read::DATA_CHUNK_LEN;
 use xdvdfs::write::{
@@ -10,10 +10,7 @@ use xdvdfs::write::{
     img::create_xdvdfs_image,
 };
 
-use crate::{
-    img::{absolute_path, with_extension},
-    progress::StdIoProgressReporter,
-};
+use crate::{img::absolute_path, progress::StdIoProgressReporter};
 
 #[derive(Args)]
 #[command(about = "Pack an image from a given directory or source ISO image")]
@@ -35,14 +32,19 @@ pub fn default_image_path(
     let source_file_name = source_path
         .file_name()
         .ok_or(anyhow::anyhow!("Failed to get file name from source path"))?;
-    let output = with_extension(Path::new(source_file_name), ext, is_dir);
+    let name = Path::new(source_file_name);
+    // A directory's name may contain dots that aren't an extension
+    let with_ext = |new_ext: &str| {
+        if is_dir {
+            name.with_added_extension(new_ext)
+        } else {
+            name.with_extension(new_ext)
+        }
+    };
+    let output = with_ext(ext);
 
     if output.exists() && absolute_path(&output)? == source_path {
-        return Ok(with_extension(
-            Path::new(source_file_name),
-            &format!("xiso.{ext}"),
-            is_dir,
-        ));
+        return Ok(with_ext(&format!("xiso.{ext}")));
     }
 
     Ok(output)
@@ -171,4 +173,34 @@ fn write_image(source_path: &Path, image_path: &Path) -> Result<(), anyhow::Erro
 
     sync(image)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod test {
+    use super::default_image_path;
+    use std::path::Path;
+
+    #[test]
+    fn default_image_path_replaces_file_extension() {
+        assert_eq!(
+            default_image_path(Path::new("/src/file.abc"), false, "xyz").unwrap(),
+            Path::new("file.xyz")
+        );
+    }
+
+    #[test]
+    fn default_image_path_adds_to_dir_without_extension() {
+        assert_eq!(
+            default_image_path(Path::new("/src/dir"), true, "xyz").unwrap(),
+            Path::new("dir.xyz")
+        );
+    }
+
+    #[test]
+    fn default_image_path_keeps_dir_extension() {
+        assert_eq!(
+            default_image_path(Path::new("/src/dir.abc"), true, "xyz").unwrap(),
+            Path::new("dir.abc.xyz")
+        );
+    }
 }

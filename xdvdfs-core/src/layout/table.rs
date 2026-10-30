@@ -26,7 +26,7 @@ impl DirectoryEntryTable {
 
 #[cfg(test)]
 mod test {
-    use crate::{layout::DirectoryEntryTable, Error};
+    use crate::{Error, layout::DirectoryEntryTable};
 
     use super::DiskRegion;
 

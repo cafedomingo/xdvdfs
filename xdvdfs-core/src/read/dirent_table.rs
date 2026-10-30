@@ -1,8 +1,8 @@
+use crate::Error;
 use crate::blockdev::BlockDeviceRead;
-use crate::layout::{cmp_ignore_case_utf8, DirectoryEntryNode, DirectoryEntryTable};
+use crate::layout::{DirectoryEntryNode, DirectoryEntryTable, cmp_ignore_case_utf8};
 use crate::read::TableRanges;
 use crate::write::fs::ImagePath;
-use crate::Error;
 use std::collections::BTreeSet;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -177,12 +177,12 @@ impl DirectoryEntryTable {
 #[cfg(test)]
 mod test {
     use crate::{
+        Error,
         layout::{
             DirectoryEntryDiskData, DirectoryEntryDiskNode, DirectoryEntryNode,
             DirectoryEntryTable, DirentAttributes, DiskRegion,
         },
         read::dirent_table::DirentSearchResult,
-        Error,
     };
 
     #[rustfmt::skip]
