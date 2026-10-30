@@ -1,6 +1,7 @@
 use crate::img::{open_image, under, under_dir};
 use clap::Args;
 use md5::{Digest, Md5};
+use std::io::{self, Write};
 use std::path::Path;
 use xdvdfs::blockdev::BlockDeviceRead;
 use xdvdfs::write::fs::ImagePath;
@@ -46,7 +47,7 @@ fn md5_file_tree<BDR: BlockDeviceRead + ?Sized>(
     for (dir, file) in tree {
         let path = under(base, dir).join(&file.name_str()?);
         let checksum = md5_file_dirent(img, *file, &path)?;
-        println!("{checksum}  {path}");
+        writeln!(io::stdout(), "{checksum}  {path}")?;
     }
 
     Ok(())
@@ -63,7 +64,7 @@ fn md5_from_file_path<BDR: BlockDeviceRead + ?Sized>(
         md5_file_tree(img, &tree, file)?;
     } else {
         let checksum = md5_file_dirent(img, dirent, file)?;
-        println!("{checksum}  {file}");
+        writeln!(io::stdout(), "{checksum}  {file}")?;
     }
 
     Ok(())

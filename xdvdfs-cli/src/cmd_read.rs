@@ -1,5 +1,6 @@
 use crate::img::open_image;
 use clap::Args;
+use std::io::{self, Write};
 use std::path::Path;
 use xdvdfs::write::fs::ImagePath;
 
@@ -23,6 +24,7 @@ pub struct LsArgs {
 pub fn cmd_ls(args: &LsArgs) -> anyhow::Result<()> {
     let mut img = open_image(Path::new(&args.image_path))?;
     let volume = xdvdfs::read::read_volume(img.as_mut())?;
+    let mut out = io::stdout().lock();
 
     let path = ImagePath::from(args.path.as_str());
     let dirent_table = if path.is_root() {
@@ -45,7 +47,7 @@ pub fn cmd_ls(args: &LsArgs) -> anyhow::Result<()> {
 
         while let Some(dirent) = iter.next_entry().map_err(in_dir)? {
             let name = dirent.name_str()?;
-            println!("{name}");
+            writeln!(out, "{name}")?;
         }
 
         return Ok(());
@@ -57,7 +59,7 @@ pub fn cmd_ls(args: &LsArgs) -> anyhow::Result<()> {
 
     for dirent in listing {
         let name = dirent.name_str()?;
-        println!("{name}");
+        writeln!(out, "{name}")?;
     }
 
     Ok(())
@@ -75,6 +77,7 @@ pub fn cmd_tree(args: &TreeArgs) -> anyhow::Result<()> {
     let volume = xdvdfs::read::read_volume(img.as_mut())?;
 
     let tree = volume.root_table.file_tree(img.as_mut())?;
+    let mut out = io::stdout().lock();
 
     let mut total_size: usize = 0;
     let mut file_count: usize = 0;
@@ -83,19 +86,20 @@ pub fn cmd_tree(args: &TreeArgs) -> anyhow::Result<()> {
         let is_dir = file.node.dirent.is_directory();
         let path = dir.join(&file.name_str()?);
         if is_dir {
-            println!("{path}/ (0 bytes)");
+            writeln!(out, "{path}/ (0 bytes)")?;
         } else {
             total_size += file.node.dirent.data.size as usize;
             file_count += 1;
 
-            println!("{} ({} bytes)", path, file.node.dirent.data.size);
+            writeln!(out, "{} ({} bytes)", path, file.node.dirent.data.size)?;
         }
     }
 
-    println!(
+    writeln!(
+        out,
         "{} files, {} bytes in {}",
         file_count, total_size, args.image_path
-    );
+    )?;
 
     Ok(())
 }
@@ -115,11 +119,12 @@ fn checksum_single(img_path: &str) -> anyhow::Result<()> {
     let volume = xdvdfs::read::read_volume(img.as_mut())?;
     let checksum = xdvdfs::checksum::checksum(img.as_mut(), &volume)?;
 
+    let mut out = io::stdout().lock();
     for byte in checksum {
-        print!("{byte:02x}");
+        write!(out, "{byte:02x}")?;
     }
 
-    println!("\t{img_path}");
+    writeln!(out, "\t{img_path}")?;
     Ok(())
 }
 
