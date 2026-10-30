@@ -1,13 +1,9 @@
-use serde::{Deserialize, Serialize};
-
 use super::DiskRegion;
 
 /// A DiskRegion that contains a directory entry table structure.
 ///
 /// This differentiates regions that contain file data.
-#[repr(C)]
-#[repr(packed)]
-#[derive(Deserialize, Serialize, Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub struct DirectoryEntryTable {
     pub region: DiskRegion,
 }

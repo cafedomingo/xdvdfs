@@ -210,7 +210,7 @@ mod test {
     fn blank_image(sectors: u32) -> Vec<u8> {
         let root = DirectoryEntryTable::new(SECTOR_SIZE, ROOT_SECTOR);
         let mut img = vec![0xff; sector_at(sectors)];
-        let volume = VolumeDescriptor::new(root).serialize().unwrap();
+        let volume = VolumeDescriptor::new(root).to_bytes();
         img[sector_at(VOLUME_SECTOR)..][..volume.len()].copy_from_slice(&volume);
         img
     }
@@ -226,7 +226,7 @@ mod test {
                 filename_length: name.len() as u8,
             },
         };
-        node.serialize_into(&mut img[at..]).unwrap();
+        img[at..][..0xe].copy_from_slice(&node.to_bytes());
         img[at + 0xe..][..name.len()].copy_from_slice(name.as_bytes());
         at + (0xe + name.len()).next_multiple_of(4)
     }
@@ -404,8 +404,7 @@ mod test {
         for dirent in dirs {
             let mut node = dirent.node;
             node.dirent.data = shared;
-            node.serialize_into(&mut img[dirent.offset as usize..])
-                .expect("Serializing dirent should succeed");
+            img[dirent.offset as usize..][..0xe].copy_from_slice(&node.to_bytes());
         }
 
         let counted_from = (u64::from(shared.sector) + 1) * SECTOR_SIZE_U64;

@@ -355,6 +355,14 @@ fn pack_name_beyond_ascii() {
     );
 }
 
+/// The name is 130 bytes on disc but 260 in UTF-8, which Linux filesystems
+/// can't hold
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn pack_long_windows_1252_name() {
+    pack_case(&[(&"é".repeat(130), b"long")], &[]);
+}
+
 #[test]
 fn xgd2_offset_image() {
     let work = tempdir().unwrap();
@@ -524,9 +532,9 @@ fn pack_rejects_image_directory_loop() {
     let mut bytes = fs::read(&img).unwrap();
     let header_at = find_unique(&bytes, b"loop_dir") - DIRENT_HEADER_LEN;
     let header = bytes[header_at..][..DIRENT_HEADER_LEN].try_into().unwrap();
-    let mut node = DirectoryEntryDiskNode::deserialize(header).unwrap();
+    let mut node = DirectoryEntryDiskNode::from_bytes(header);
     node.dirent.data.sector = (header_at / SECTOR_LEN) as u32;
-    node.serialize_into(&mut bytes[header_at..]).unwrap();
+    bytes[header_at..][..DIRENT_HEADER_LEN].copy_from_slice(&node.to_bytes());
     fs::write(&img, bytes).unwrap();
 
     let out = work.path().join("out.xiso");

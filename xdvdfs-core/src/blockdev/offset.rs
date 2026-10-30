@@ -147,9 +147,7 @@ mod test {
         let volume = VolumeDescriptor::new(DirectoryEntryTable {
             region: DiskRegion { sector: 0, size: 0 },
         });
-        let volume = volume
-            .serialize()
-            .expect("Volume serialization should succeed");
+        let volume = volume.to_bytes();
         slbd.write(32 * 2048, &volume)
             .expect("Write should succeed");
 
@@ -173,9 +171,7 @@ mod test {
         let volume = VolumeDescriptor::new(DirectoryEntryTable {
             region: DiskRegion { sector: 0, size: 0 },
         });
-        let volume = volume
-            .serialize()
-            .expect("Volume serialization should succeed");
+        let volume = volume.to_bytes();
 
         let xgd1_volume_header_offset = 405798912 + 32 * 2048;
         slbd.write(xgd1_volume_header_offset, &volume)
@@ -201,9 +197,7 @@ mod test {
         let volume = VolumeDescriptor::new(DirectoryEntryTable {
             region: DiskRegion { sector: 0, size: 0 },
         });
-        let volume = volume
-            .serialize()
-            .expect("Volume serialization should succeed");
+        let volume = volume.to_bytes();
 
         let xgd2_volume_header_offset = 265879552 + 32 * 2048;
         slbd.write(xgd2_volume_header_offset, &volume)
@@ -229,9 +223,7 @@ mod test {
         let volume = VolumeDescriptor::new(DirectoryEntryTable {
             region: DiskRegion { sector: 0, size: 0 },
         });
-        let volume = volume
-            .serialize()
-            .expect("Volume serialization should succeed");
+        let volume = volume.to_bytes();
 
         let xgd3_volume_header_offset = 34078720 + 32 * 2048;
         slbd.write(xgd3_volume_header_offset, &volume)

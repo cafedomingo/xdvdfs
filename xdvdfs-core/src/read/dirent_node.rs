@@ -1,4 +1,4 @@
-use crate::{blockdev::BlockDeviceRead, layout::DirectoryEntryNode, Error};
+use crate::{blockdev::BlockDeviceRead, layout::DirectoryEntryNode};
 
 impl DirectoryEntryNode {
     /// Read a DirectoryEntryNode from disk, including
@@ -10,9 +10,7 @@ impl DirectoryEntryNode {
         let mut dirent_buf = [0; 0xe];
         dev.read(offset, &mut dirent_buf)?;
 
-        let dirent =
-            Self::deserialize(&dirent_buf, offset).map_err(|_| Error::DeserializationFailed)?;
-        let Some(mut dirent) = dirent else {
+        let Some(mut dirent) = Self::from_bytes(&dirent_buf, offset) else {
             return Ok(None);
         };
 

@@ -22,15 +22,12 @@ pub struct InfoArgs {
 }
 
 fn print_volume(volume: &VolumeDescriptor) {
-    let time = volume.filetime;
-    let sector = volume.root_table.region.sector;
-    let size = volume.root_table.region.size;
-
+    let root = volume.root_table.region;
     println!("{0: <20} {1}", "Valid:", volume.is_valid());
-    println!("{0: <20} {1}", "Creation time:", time);
+    println!("{0: <20} {1}", "Creation time:", volume.filetime);
     println!(
         "{0: <20} Sector {1} ({2} bytes)",
-        "Root Entry:", sector, size
+        "Root Entry:", root.sector, root.size
     );
 }
 
@@ -57,11 +54,10 @@ fn print_dirent(dirent: &DirectoryEntryNode) -> anyhow::Result<()> {
         }
     );
 
-    let sector = dirent.node.dirent.data.sector;
-    let size = dirent.node.dirent.data.size;
+    let data = dirent.node.dirent.data;
     println!(
         "{0: <20} Sector {1} ({2} bytes)",
-        "Data Location:", sector, size
+        "Data Location:", data.sector, data.size
     );
 
     println!("{0: <20} {1}", "Attributes:", dirent.node.dirent.attributes);

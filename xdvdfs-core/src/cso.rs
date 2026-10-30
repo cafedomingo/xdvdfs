@@ -5,15 +5,13 @@
 use std::fmt::Display;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 
-use bincode::Options;
-use serde::{Deserialize, Serialize};
-
 use crate::blockdev::BlockDeviceRead;
 use crate::layout::{SECTOR_SIZE, SECTOR_SIZE_U64, SECTOR_SIZE_USZ};
 use crate::read::DATA_CHUNK_LEN;
 
 const MAGIC: u32 = u32::from_le_bytes(*b"CISO");
 const HEADER_LEN: u32 = 24;
+const HEADER_LEN_USZ: usize = HEADER_LEN as usize;
 const VERSION: u8 = 2;
 const BLOCK_LEN: u32 = SECTOR_SIZE;
 const BLOCK_LEN_U64: u64 = SECTOR_SIZE_U64;
@@ -36,7 +34,6 @@ const MIN_SAVING: usize = 12;
 const PART_PAD: u64 = 0x400;
 const ZEROS: [u8; PART_PAD as usize] = [0; PART_PAD as usize];
 
-#[derive(Deserialize, Serialize)]
 struct Header {
     magic: u32,
     header_len: u32,
@@ -44,13 +41,30 @@ struct Header {
     block_len: u32,
     version: u8,
     alignment: u8,
-    reserved: [u8; 2],
 }
 
-fn bincode() -> impl Options {
-    bincode::DefaultOptions::new()
-        .with_fixint_encoding()
-        .with_little_endian()
+impl Header {
+    fn from_bytes(buf: &[u8; HEADER_LEN_USZ]) -> Self {
+        Self {
+            magic: u32::from_le_bytes(buf[0..4].try_into().unwrap()),
+            header_len: u32::from_le_bytes(buf[4..8].try_into().unwrap()),
+            image_len: u64::from_le_bytes(buf[8..16].try_into().unwrap()),
+            block_len: u32::from_le_bytes(buf[16..20].try_into().unwrap()),
+            version: buf[20],
+            alignment: buf[21],
+        }
+    }
+
+    fn to_bytes(&self) -> [u8; HEADER_LEN_USZ] {
+        let mut buf = [0; HEADER_LEN_USZ];
+        buf[0..4].copy_from_slice(&self.magic.to_le_bytes());
+        buf[4..8].copy_from_slice(&self.header_len.to_le_bytes());
+        buf[8..16].copy_from_slice(&self.image_len.to_le_bytes());
+        buf[16..20].copy_from_slice(&self.block_len.to_le_bytes());
+        buf[20] = self.version;
+        buf[21] = self.alignment;
+        buf
+    }
 }
 
 fn invalid_data(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
@@ -98,9 +112,9 @@ impl<R: BlockDeviceRead> CsoReader<R> {
             return Err(invalid_data("CSO header runs past the end of the file"));
         }
 
-        let mut header = [0; HEADER_LEN as usize];
+        let mut header = [0; HEADER_LEN_USZ];
         inner.read(0, &mut header)?;
-        let header: Header = bincode().deserialize(&header).map_err(invalid_data)?;
+        let header = Header::from_bytes(&header);
         if header.magic != MAGIC {
             return Err(invalid_data("not a CSO image"));
         }
@@ -288,9 +302,8 @@ pub fn write<W: Write + Seek>(
         block_len: BLOCK_LEN,
         version: VERSION,
         alignment: ALIGNMENT,
-        reserved: [0; 2],
     };
-    first.write_all(&bincode().serialize(&header).map_err(io::Error::other)?)?;
+    first.write_all(&header.to_bytes())?;
     // Filled in once the block offsets are known
     let index_len = (blocks + 1) * size_of::<u32>() as u64;
     io::copy(&mut io::repeat(0).take(index_len), first)?;
@@ -358,8 +371,8 @@ mod test {
     use rand::{rngs::StdRng, RngCore, SeedableRng};
 
     use super::{
-        write, CsoReader, ALIGNMENT, BLOCK_LEN, BLOCK_LEN_USZ, COMPRESSED, HEADER_LEN, LEN_PREFIX,
-        MAGIC, PART_PAD, VERSION,
+        write, CsoReader, ALIGNMENT, BLOCK_LEN, BLOCK_LEN_USZ, COMPRESSED, HEADER_LEN,
+        HEADER_LEN_USZ, LEN_PREFIX, MAGIC, PART_PAD, VERSION,
     };
     use crate::blockdev::BlockDeviceRead;
 
@@ -410,7 +423,7 @@ mod test {
 
     fn entries(cso: &[u8]) -> Vec<u32> {
         let count = (image_len(cso) / u64::from(BLOCK_LEN)) as usize + 1;
-        cso[HEADER_LEN as usize..][..4 * count]
+        cso[HEADER_LEN_USZ..][..4 * count]
             .as_chunks()
             .0
             .iter()
@@ -440,7 +453,7 @@ mod test {
     }
 
     fn set_entry(cso: &[u8], i: usize, entry: u32) -> Vec<u8> {
-        set(cso, HEADER_LEN as usize + 4 * i, &entry.to_le_bytes())
+        set(cso, HEADER_LEN_USZ + 4 * i, &entry.to_le_bytes())
     }
 
     fn stored(fill: u8) -> (bool, Vec<u8>) {
@@ -462,7 +475,7 @@ mod test {
 
     /// A one-part CSO of `blocks`, each whether it is compressed and its bytes
     fn craft(blocks: &[(bool, Vec<u8>)]) -> Vec<u8> {
-        let data_start = HEADER_LEN as usize + 4 * (blocks.len() + 1);
+        let data_start = HEADER_LEN_USZ + 4 * (blocks.len() + 1);
         let mut cso = vec![0; data_start];
         let mut index = Vec::new();
         for (is_compressed, bytes) in blocks {
@@ -551,7 +564,7 @@ mod test {
         for (case, at, bytes) in header_cases {
             assert_invalid_one(&set(&valid, *at, bytes), case);
         }
-        assert_invalid_one(&valid[..HEADER_LEN as usize - 1], "short header");
+        assert_invalid_one(&valid[..HEADER_LEN_USZ - 1], "short header");
 
         let three = craft(&[stored(1), stored(2), stored(3)]);
         let index = entries(&three);
