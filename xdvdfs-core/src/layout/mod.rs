@@ -14,6 +14,9 @@ pub use disk_data::*;
 mod disk_node;
 pub use disk_node::*;
 
+mod iso9660;
+pub use iso9660::*;
+
 mod name;
 pub use name::*;
 

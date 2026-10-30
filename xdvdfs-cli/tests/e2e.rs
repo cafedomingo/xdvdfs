@@ -13,7 +13,7 @@ use common::{
 use md5::{Digest, Md5};
 use tempfile::tempdir;
 use xdvdfs::blockdev::XDVDFSOffsets;
-use xdvdfs::layout::DirectoryEntryDiskNode;
+use xdvdfs::layout::{DirectoryEntryDiskNode, ISO9660_DESCRIPTORS_OFFSET};
 use xdvdfs::read::DATA_CHUNK_LEN;
 use xdvdfs::write::fs::SYSTEM_UPDATE_DIR;
 use xdvdfs::xbe::{MEDIA_CHECK, MEDIA_CHECK_PATCH};
@@ -282,6 +282,24 @@ fn lookup_finds_every_file() {
         ]);
     }
     assert_trees_equal(&src, out.path());
+}
+
+#[test]
+fn pack_writes_iso9660_descriptor() {
+    let work = tempdir().unwrap();
+    let src = work.path().join("src");
+    write_tree(&src, &[("a", b"a")], &[]);
+    let img = work.path().join("img.xiso");
+    pack(&src, &img);
+
+    let bytes = fs::read(&img).unwrap();
+    let sectors = (bytes.len() / SECTOR_LEN) as u32;
+    let descriptors = &bytes[ISO9660_DESCRIPTORS_OFFSET as usize..];
+    let (primary, terminator) = descriptors.split_at(SECTOR_LEN);
+    assert_eq!(&primary[..7], b"\x01CD001\x01");
+    assert_eq!(&terminator[..7], b"\xffCD001\x01");
+    assert_eq!(primary[0x50..0x54], sectors.to_le_bytes());
+    assert_eq!(primary[0x54..0x58], sectors.to_be_bytes());
 }
 
 #[test]

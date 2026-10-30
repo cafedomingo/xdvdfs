@@ -60,6 +60,7 @@ This will create an iso that matches 1-to-1 with the input directory.
 The image depends only on the names and contents of the files, so packing them again, or repacking the image, gives the same bytes.
 `--media-patch` on `pack` or `compress` patches the media check in every `.xbe`, as extract-xiso does by default; without it, files are copied unchanged.
 `--skip-system-update` on `pack`, `compress` or `unpack` leaves out every `$SystemUpdate` folder, the dashboard update retail discs carry.
+`pack` and `compress` write an ISO 9660 volume descriptor in sectors 16 and 17, as extract-xiso does, so burning software detects the 2048-byte sector size.
 File names are stored in Windows-1252, one byte per character, so a name can be up to 255 characters and can't use characters outside it, such as those in `日本.txt`.
 Symlinks are followed; a directory symlink that loops is an error. If packing fails, the error names the file at fault and any existing image at the output path is left untouched.
 Neither `pack` nor `compress` creates a missing output folder; the error names the output path.
