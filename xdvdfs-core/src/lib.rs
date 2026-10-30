@@ -1,5 +1,6 @@
 pub mod blockdev;
 pub mod checksum;
+pub mod cso;
 mod error;
 pub mod layout;
 pub mod read;

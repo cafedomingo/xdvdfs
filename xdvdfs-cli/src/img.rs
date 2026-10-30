@@ -1,27 +1,13 @@
-use ciso::read::CSOReader;
 use std::{
     fs::File,
     io::BufReader,
     path::{Path, PathBuf},
 };
 use xdvdfs::blockdev::{BlockDeviceRead, OffsetWrapper};
+use xdvdfs::cso::CsoReader;
 use xdvdfs::write::fs::ImagePath;
 
-pub struct CSOBlockDevice<R: ciso::read::Read<ReadError = std::io::Error>> {
-    inner: CSOReader<std::io::Error, R>,
-}
-
-impl<R> BlockDeviceRead for CSOBlockDevice<R>
-where
-    R: ciso::read::Read<ReadError = std::io::Error>,
-{
-    fn read(&mut self, offset: u64, buffer: &mut [u8]) -> Result<(), std::io::Error> {
-        self.inner.read_offset(offset, buffer).map_err(|e| match e {
-            ciso::layout::Error::Other(e) => e,
-            e => std::io::Error::other(e),
-        })
-    }
-}
+use crate::split::SplitFileReader;
 
 pub fn open_image_raw(path: &Path) -> Result<OffsetWrapper<BufReader<File>>, anyhow::Error> {
     let img = File::options().read(true).open(path)?;
@@ -29,41 +15,26 @@ pub fn open_image_raw(path: &Path) -> Result<OffsetWrapper<BufReader<File>>, any
     Ok(xdvdfs::blockdev::OffsetWrapper::new(img)?)
 }
 
+/// Opens an image, or a CSO: `x.1.cso` with the parts after it, or any
+/// other `x.cso` as one file
 pub fn open_image(path: &Path) -> Result<Box<dyn BlockDeviceRead>, anyhow::Error> {
-    if path.extension().is_some_and(|e| e == "cso") {
-        let file_base = path.with_extension("");
-        let split = file_base.extension().is_some_and(|e| e == "1");
-
-        let reader: Box<dyn ciso::read::Read<ReadError = std::io::Error>> = if split {
-            let mut files = Vec::new();
-            for i in 1.. {
-                let part = file_base.with_extension(format!("{i}.cso"));
-                if !part.exists() {
-                    break;
-                }
-
-                let part = std::io::BufReader::new(std::fs::File::open(part)?);
-                files.push(part);
-            }
-
-            if files.is_empty() {
-                return Err(anyhow::anyhow!("Failed to open file {:?}", path));
-            }
-
-            Box::from(ciso::split::SplitFileReader::new(files)?)
-        } else {
-            let file = std::io::BufReader::new(std::fs::File::open(path)?);
-            Box::from(file)
-        };
-
-        let reader = ciso::read::CSOReader::new(reader)?;
-        let reader = Box::from(CSOBlockDevice { inner: reader });
-        Ok(reader)
-    } else {
-        let image = open_image_raw(path)?;
-        let image = Box::from(image);
-        Ok(image)
+    if !path.extension().is_some_and(|e| e == "cso") {
+        return Ok(Box::new(open_image_raw(path)?));
     }
+
+    if path
+        .with_extension("")
+        .extension()
+        .is_some_and(|e| e == "1")
+    {
+        let parts = SplitFileReader::open(path)?;
+        let part_lens = parts.part_lens().to_vec();
+        return Ok(Box::new(CsoReader::open(parts, &part_lens)?));
+    }
+
+    let file = File::open(path)?;
+    let len = file.metadata()?.len();
+    Ok(Box::new(CsoReader::open(file, &[len])?))
 }
 
 /// The full path of `path`, which `file_tree` of the table at `base` gives

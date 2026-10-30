@@ -1,8 +1,10 @@
-use std::io::Write;
+use std::fs::File;
+use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context};
 use clap::Args;
+use xdvdfs::read::DATA_CHUNK_LEN;
 use xdvdfs::write::{
     fs::{StdFilesystem, StdIOCopier, XDVDFSFilesystem},
     img::create_xdvdfs_image,
@@ -97,20 +99,43 @@ pub fn cmd_pack(args: &PackArgs) -> Result<(), anyhow::Error> {
     cmd_pack_path(&source_path, &image_path)
 }
 
-pub fn cmd_pack_path(source_path: &Path, image_path: &Path) -> Result<(), anyhow::Error> {
+/// The file that writing `image_path` replaces, and the `.partial` file to
+/// write first, both checked against the absolute `source_path`.
+pub fn output_paths(
+    source_path: &Path,
+    image_path: &Path,
+) -> Result<(PathBuf, PathBuf), anyhow::Error> {
     let image_path = output_path(image_path);
     let partial_path = image_path.with_added_extension("partial");
     for path in [&image_path, &partial_path] {
         check_image_path(source_path, path)?;
     }
 
-    pack_into(source_path, &partial_path)?;
-    if let Err(err) = std::fs::rename(&partial_path, &image_path) {
-        let _ = std::fs::remove_file(&partial_path);
+    Ok((image_path, partial_path))
+}
+
+pub fn replace(partial_path: &Path, image_path: &Path) -> Result<(), anyhow::Error> {
+    if let Err(err) = std::fs::rename(partial_path, image_path) {
+        let _ = std::fs::remove_file(partial_path);
         return Err(err).with_context(|| format!("Failed to replace {}", image_path.display()));
     }
 
     Ok(())
+}
+
+pub fn sync(image: BufWriter<File>) -> std::io::Result<()> {
+    // Dropping a `BufWriter` or `File` ignores errors, and some volumes report
+    // write errors only when the data is synced
+    image
+        .into_inner()
+        .map_err(std::io::IntoInnerError::into_error)?
+        .sync_all()
+}
+
+pub fn cmd_pack_path(source_path: &Path, image_path: &Path) -> Result<(), anyhow::Error> {
+    let (image_path, partial_path) = output_paths(source_path, image_path)?;
+    pack_into(source_path, &partial_path)?;
+    replace(&partial_path, &image_path)
 }
 
 /// Packs `source_path` into a new file at `image_path`, and removes that file
@@ -129,8 +154,8 @@ fn write_image(source_path: &Path, image_path: &Path) -> Result<(), anyhow::Erro
     let meta = std::fs::metadata(source_path)?;
     let is_dir = meta.is_dir();
 
-    let image = std::fs::File::create(image_path)?;
-    let mut image = std::io::BufWriter::with_capacity(1024 * 1024, image);
+    let image = File::create(image_path)?;
+    let mut image = BufWriter::with_capacity(DATA_CHUNK_LEN, image);
 
     let progress_visitor = StdIoProgressReporter::new(source_path, is_dir);
     if is_dir {
@@ -144,9 +169,6 @@ fn write_image(source_path: &Path, image_path: &Path) -> Result<(), anyhow::Erro
         bail!("Source must be a directory or an image file");
     }
 
-    // Dropping a `BufWriter` or `File` ignores errors, and some volumes report
-    // write errors only when the data is synced
-    image.flush()?;
-    image.get_ref().sync_all()?;
+    sync(image)?;
     Ok(())
 }

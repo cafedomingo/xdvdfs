@@ -99,29 +99,6 @@ where
     }
 }
 
-impl<F, SLBD, SLBFS> ciso::write::SectorReader for SectorLinearImage<SLBD, SLBFS>
-where
-    F: FilesystemCopier<[u8]>,
-    SLBD: Deref<Target = SectorLinearBlockDevice> + Send + Sync,
-    SLBFS: DerefMut<Target = SectorLinearBlockFilesystem<F>> + Send + Sync,
-{
-    type ReadError = crate::Error;
-
-    fn size(&mut self) -> Result<u64, Self::ReadError> {
-        Ok(self.linear.size())
-    }
-
-    fn read_sector(&mut self, sector: usize, sector_size: u32) -> Result<Vec<u8>, Self::ReadError> {
-        let offset = sector as u64 * sector_size as u64;
-        let mut data = self.read_linear(offset, sector_size as u64)?;
-        if data.len() < sector_size as usize {
-            data.resize(sector_size as usize, 0);
-        }
-
-        Ok(data)
-    }
-}
-
 impl<F, SLBD, SLBFS> BlockDeviceRead for SectorLinearImage<SLBD, SLBFS>
 where
     F: FilesystemCopier<[u8]>,
