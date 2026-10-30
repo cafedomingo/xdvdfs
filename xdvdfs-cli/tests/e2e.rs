@@ -78,15 +78,32 @@ fn checksum(img: &Path) -> String {
 /// Packs a 1,000,000-byte `big.bin` into `work/img.xiso`, then cuts the
 /// image to 600,000 bytes.
 fn truncated_image(work: &Path) -> PathBuf {
+    truncated_image_with(work, &[("big.bin", &vec![1; 1_000_000])], 600_000)
+}
+
+/// Where `sub_after_big_image` puts `/sub`'s table
+const SUB_TABLE_SECTOR: u64 = 524;
+
+/// Packs `a.txt`, `big.bin` and `sub/f` into `work/img.xiso`, then cuts the
+/// image to `len` bytes. A three-entry table is balanced whatever the listing
+/// order, so `big.bin` is allocated first, then `a.txt`, then `/sub`'s table.
+fn sub_after_big_image(work: &Path, len: u64) -> PathBuf {
+    let big = vec![1; 1_000_000];
+    let files: &[(&str, &[u8])] = &[("a.txt", b"a"), ("big.bin", &big), ("sub/f", b"f")];
+    truncated_image_with(work, files, len)
+}
+
+/// Packs `files` into `work/img.xiso`, then cuts the image to `len` bytes.
+fn truncated_image_with(work: &Path, files: &[(&str, &[u8])], len: u64) -> PathBuf {
     let src = work.join("src");
     let img = work.join("img.xiso");
-    write_tree(&src, &[("big.bin", &vec![1; 1_000_000])], &[]);
+    write_tree(&src, files, &[]);
     pack(&src, &img);
     File::options()
         .write(true)
         .open(&img)
         .unwrap()
-        .set_len(600_000)
+        .set_len(len)
         .unwrap();
     img
 }
@@ -364,6 +381,72 @@ fn unpack_truncated_image_fails() {
 }
 
 #[test]
+fn truncated_file_names_file() {
+    let work = tempdir().unwrap();
+    let img = truncated_image(work.path());
+
+    for cmd in ["checksum", "md5"] {
+        let stderr = assert_error(&xdvdfs(&[cmd.as_ref(), img.as_ref()]));
+        assert!(
+            stderr.contains("/big.bin: file runs past the end"),
+            "{cmd} printed:\n{stderr}"
+        );
+    }
+}
+
+#[test]
+fn truncated_directory_table_names_directory() {
+    let work = tempdir().unwrap();
+    let img = sub_after_big_image(work.path(), 600_000);
+    let out = work.path().join("out");
+    let truncated = "/sub: directory table runs past the end";
+
+    let stderr = pack_error(&img);
+    assert!(stderr.contains(truncated), "pack printed:\n{stderr}");
+
+    let commands: &[&[&OsStr]] = &[
+        &["compress".as_ref(), img.as_ref()],
+        &["unpack".as_ref(), img.as_ref(), out.as_ref()],
+        &[
+            "copy-out".as_ref(),
+            img.as_ref(),
+            "/sub/f".as_ref(),
+            out.as_ref(),
+        ],
+        &[
+            "copy-out".as_ref(),
+            img.as_ref(),
+            "/sub".as_ref(),
+            out.as_ref(),
+        ],
+        &["tree".as_ref(), img.as_ref()],
+        &["checksum".as_ref(), img.as_ref()],
+        &["md5".as_ref(), img.as_ref()],
+        &["md5".as_ref(), img.as_ref(), "/sub".as_ref()],
+        &["ls".as_ref(), img.as_ref(), "/sub".as_ref()],
+        &["info".as_ref(), img.as_ref(), "/sub".as_ref()],
+    ];
+    for args in commands {
+        // ciso writes into the working directory
+        let stderr = assert_error(&xdvdfs_in(work.path(), args));
+        assert!(stderr.contains(truncated), "{args:?} printed:\n{stderr}");
+    }
+}
+
+#[test]
+fn md5_names_directory_cut_inside_its_table() {
+    let work = tempdir().unwrap();
+    // Keeps `/sub`'s one entry, which md5 lists, but not the rest of the
+    // table's sector, which md5 hashes
+    let img = sub_after_big_image(work.path(), SUB_TABLE_SECTOR * 2048 + 100);
+    let stderr = assert_error(&xdvdfs(&["md5".as_ref(), img.as_ref()]));
+    assert!(
+        stderr.contains("/sub: directory table runs past the end"),
+        "md5 printed:\n{stderr}"
+    );
+}
+
+#[test]
 fn unpack_dot_errors() {
     assert_error(&xdvdfs(&["unpack".as_ref(), ".".as_ref()]));
 }
@@ -468,6 +551,17 @@ fn pack_truncated_image_source_fails() {
 
     let stderr = pack_error(&img);
     assert!(stderr.contains("big.bin"), "pack printed:\n{stderr}");
+}
+
+#[test]
+fn compress_truncated_image_source_fails() {
+    let work = tempdir().unwrap();
+    let img = truncated_image(work.path());
+
+    // ciso writes into the working directory
+    let compress = xdvdfs_in(work.path(), &["compress".as_ref(), img.as_ref()]);
+    let stderr = assert_error(&compress);
+    assert!(stderr.contains("big.bin"), "compress printed:\n{stderr}");
 }
 
 #[test]

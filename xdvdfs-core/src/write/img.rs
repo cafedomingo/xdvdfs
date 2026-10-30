@@ -6,7 +6,7 @@ use super::dirtab::{
     AvlDirectoryEntryTableBuilder, AvlDirectoryEntryTableWriter, DirtabWriterBuffers,
 };
 use super::fs::{DirectoryTreeEntry, FilesystemCopier, FilesystemHierarchy, PathRef, PathVec};
-use super::{FileStructureError, WriteError};
+use crate::Error;
 
 pub use super::progress_info::*;
 
@@ -17,7 +17,7 @@ struct DirentTableVec<'a> {
 
 fn create_dirent_tables<'a>(
     dirtree: &'a [DirectoryTreeEntry],
-) -> Result<DirentTableVec<'a>, FileStructureError> {
+) -> crate::Result<DirentTableVec<'a>> {
     let mut dirent_tables: Vec<(PathRef<'_>, AvlDirectoryEntryTableWriter<'a>)> =
         Vec::with_capacity(dirtree.len());
     let mut dtab_size_map: Vec<u32> = vec![0u32; dirtree.len()];
@@ -47,10 +47,7 @@ fn create_dirent_tables<'a>(
                 }
                 fs::FileType::File => {
                     let file_size = entry.len.try_into().map_err(|_| {
-                        FileStructureError::FileTooLarge(PathVec::from_base(
-                            path.clone(),
-                            file_name,
-                        ))
+                        Error::FileTooLarge(PathVec::from_base(path.clone(), file_name))
                     })?;
                     dirtab.add_file(file_name, file_size)?;
                 }
@@ -73,12 +70,6 @@ fn create_dirent_tables<'a>(
     })
 }
 
-type GenericWriteError<BDW, FS> = WriteError<
-    <BDW as BlockDeviceWrite>::WriteError,
-    <FS as FilesystemHierarchy>::Error,
-    <FS as FilesystemCopier<BDW>>::Error,
->;
-
 pub struct XDVDFSImageWriter<
     'a,
     BDW: BlockDeviceWrite + ?Sized,
@@ -100,21 +91,20 @@ where
         &mut self,
         root_dirtab_size: u32,
         root_dirtab_sector: u32,
-    ) -> Result<(), GenericWriteError<BDW, FS>> {
+    ) -> crate::Result<()> {
         // FIXME: Set timestamp
         let root_table = layout::DirectoryEntryTable::new(root_dirtab_size, root_dirtab_sector);
         let volume_info = layout::VolumeDescriptor::new(root_table);
         let volume_info = volume_info
             .serialize()
-            .map_err(|_| FileStructureError::SerializationError)?;
+            .map_err(|_| Error::SerializationFailed)?;
         self.image
-            .write(32 * layout::SECTOR_SIZE as u64, &volume_info)
-            .map_err(WriteError::BlockDeviceError)?;
+            .write(32 * layout::SECTOR_SIZE as u64, &volume_info)?;
         Ok(())
     }
 
-    fn apply_image_alignment_padding(&mut self) -> Result<(), GenericWriteError<BDW, FS>> {
-        let len = self.image.len().map_err(WriteError::BlockDeviceError)?;
+    fn apply_image_alignment_padding(&mut self) -> crate::Result<()> {
+        let len = self.image.len()?;
 
         let aligned = len.next_multiple_of(32 * layout::SECTOR_SIZE as u64);
         let padding = aligned - len;
@@ -122,15 +112,13 @@ where
 
         if padding > 0 {
             let padding = vec![0x00; padding];
-            self.image
-                .write(len, &padding)
-                .map_err(WriteError::BlockDeviceError)?;
+            self.image.write(len, &padding)?;
         }
 
         Ok(())
     }
 
-    fn create_image(&mut self) -> Result<(), GenericWriteError<BDW, FS>> {
+    fn create_image(&mut self) -> crate::Result<()> {
         // The size of a directory entry depends on the size of
         // directory entries inside it (including directory tables).
         // We need to compute the size of all dirent tables before
@@ -142,8 +130,7 @@ where
         let mut dirtree_count_cb = |entry_count: usize| {
             self.progress_visitor.directory_discovered(entry_count);
         };
-        let dirtree = fs::dir_tree(self.fs, &mut dirtree_count_cb)
-            .map_err(WriteError::FilesystemHierarchyError)?;
+        let dirtree = fs::dir_tree(self.fs, &mut dirtree_count_cb)?;
         let DirentTableVec {
             dirent_tables,
             count: dirent_count,
@@ -171,12 +158,10 @@ where
 
             dirtab.disk_repr(&mut sector_allocator, &mut dtw_buffers)?;
 
-            self.image
-                .write(
-                    dirtab_sector * layout::SECTOR_SIZE as u64,
-                    &dtw_buffers.dirtab_bytes,
-                )
-                .map_err(WriteError::BlockDeviceError)?;
+            self.image.write(
+                dirtab_sector * layout::SECTOR_SIZE as u64,
+                &dtw_buffers.dirtab_bytes,
+            )?;
 
             for entry in dirtab.iter() {
                 let file_path = path.join(entry.name);
@@ -187,15 +172,13 @@ where
                     continue;
                 }
 
-                self.fs
-                    .copy_file_in(
-                        file_path,
-                        self.image,
-                        0,
-                        entry.sector * layout::SECTOR_SIZE as u64,
-                        entry.size,
-                    )
-                    .map_err(WriteError::FilesystemCopierError)?;
+                self.fs.copy_file_in(
+                    file_path,
+                    self.image,
+                    0,
+                    entry.sector * layout::SECTOR_SIZE as u64,
+                    entry.size,
+                )?;
             }
         }
 
@@ -216,7 +199,7 @@ pub fn create_xdvdfs_image<
     fs: &mut FS,
     image: &mut BDW,
     progress_visitor: impl ProgressVisitor,
-) -> Result<(), GenericWriteError<BDW, FS>> {
+) -> crate::Result<()> {
     let mut img_writer = XDVDFSImageWriter {
         fs,
         image,
@@ -228,7 +211,6 @@ pub fn create_xdvdfs_image<
 
 #[cfg(test)]
 mod test {
-    use crate::blockdev::NullBlockDevice;
     use crate::layout;
     use crate::write::dirtab::FileListingEntry;
     use crate::write::fs::{
@@ -238,7 +220,8 @@ mod test {
     use crate::write::img::{NoOpProgressVisitor, OwnedProgressInfo};
 
     use super::fs::DirectoryTreeEntry;
-    use super::{create_dirent_tables, create_xdvdfs_image, FileStructureError, ProgressInfo};
+    use super::{create_dirent_tables, create_xdvdfs_image, ProgressInfo};
+    use crate::Error;
 
     #[test]
     fn test_create_dirent_tables_empty_root() {
@@ -286,9 +269,9 @@ mod test {
         }];
 
         let res = create_dirent_tables(dirtree).map(|tables| tables.count);
-        assert_eq!(
-            res,
-            Err(FileStructureError::FileTooLarge(PathVec::from("/a/big")))
+        assert!(
+            matches!(&res, Err(Error::FileTooLarge(path)) if *path == PathVec::from("/a/big")),
+            "{res:?}"
         );
     }
 
@@ -416,11 +399,12 @@ mod test {
         memfs.touch("/a/b");
         memfs.mkdir("/b");
 
-        let mut nulldev = NullBlockDevice::default();
+        let mut slbd = SectorLinearBlockDevice::default();
+        let mut slbfs = SectorLinearBlockFilesystem::new(memfs);
 
         let mut progress_list = Vec::new();
 
-        let res = create_xdvdfs_image(&mut memfs, &mut nulldev, |pi: ProgressInfo<'_>| {
+        let res = create_xdvdfs_image(&mut slbfs, &mut slbd, |pi: ProgressInfo<'_>| {
             progress_list.push(pi.to_owned())
         });
         assert!(res.is_ok());
@@ -447,16 +431,16 @@ mod test {
 
     #[test]
     fn test_create_xdvdfs_image_32_sector_padding() {
-        let mut memfs = MemoryFilesystem::default();
-        let mut nulldev = NullBlockDevice::default();
+        let mut slbd = SectorLinearBlockDevice::default();
+        let mut slbfs = SectorLinearBlockFilesystem::new(MemoryFilesystem::default());
 
-        let res = create_xdvdfs_image(&mut memfs, &mut nulldev, NoOpProgressVisitor);
+        let res = create_xdvdfs_image(&mut slbfs, &mut slbd, NoOpProgressVisitor);
         assert!(res.is_ok());
 
         // Volume info at sector 32
         // Root dirent (empty) at sector 33
         // Padding up to 64
-        assert_eq!(nulldev.len_blocking(), 64 * layout::SECTOR_SIZE as u64);
+        assert_eq!(slbd.size(), 64 * layout::SECTOR_SIZE as u64);
     }
 
     #[test]

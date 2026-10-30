@@ -14,8 +14,6 @@ impl<R> BlockDeviceRead for CSOBlockDevice<R>
 where
     R: ciso::read::Read<ReadError = std::io::Error>,
 {
-    type ReadError = std::io::Error;
-
     fn read(&mut self, offset: u64, buffer: &mut [u8]) -> Result<(), std::io::Error> {
         self.inner.read_offset(offset, buffer).map_err(|e| match e {
             ciso::layout::Error::Other(e) => e,
@@ -30,9 +28,7 @@ pub fn open_image_raw(path: &Path) -> Result<OffsetWrapper<BufReader<File>>, any
     Ok(xdvdfs::blockdev::OffsetWrapper::new(img)?)
 }
 
-pub fn open_image(
-    path: &Path,
-) -> Result<Box<dyn BlockDeviceRead<ReadError = std::io::Error>>, anyhow::Error> {
+pub fn open_image(path: &Path) -> Result<Box<dyn BlockDeviceRead>, anyhow::Error> {
     if path.extension().is_some_and(|e| e == "cso") {
         let file_base = path.with_extension("");
         let split = file_base.extension().is_some_and(|e| e == "1");
@@ -66,6 +62,17 @@ pub fn open_image(
         let image = open_image_raw(path)?;
         let image = Box::from(image);
         Ok(image)
+    }
+}
+
+/// Names a truncated directory by its full path, since `file_tree` of the
+/// table at `base` names them relative to it
+pub fn under_dir(base: &str) -> impl Fn(xdvdfs::Error) -> xdvdfs::Error + '_ {
+    move |err| match err {
+        xdvdfs::Error::TruncatedDirectory(dir) => {
+            xdvdfs::Error::TruncatedDirectory(base.split('/').chain(dir.iter()).collect())
+        }
+        err => err,
     }
 }
 

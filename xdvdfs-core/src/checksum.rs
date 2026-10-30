@@ -1,36 +1,22 @@
 use sha3::{Digest, Sha3_256};
 use std::collections::BTreeMap;
-use thiserror::Error;
 
 use crate::{
     blockdev::BlockDeviceRead,
     layout::{DirectoryEntryNode, VolumeDescriptor},
-    read::{DirectoryTableWalkError, DiskDataReadError},
 };
-
-#[non_exhaustive]
-#[derive(Error, Debug, Clone, Eq, PartialEq)]
-pub enum ChecksumError<E> {
-    #[error("failed to read xdvdfs filesystem")]
-    FilesystemError(#[from] DirectoryTableWalkError<E>),
-    #[error("failed to read image contents")]
-    ReadDataError(#[from] DiskDataReadError<E>),
-}
 
 pub fn checksum<BDR: BlockDeviceRead + ?Sized>(
     dev: &mut BDR,
     volume: &VolumeDescriptor,
-) -> Result<[u8; 32], ChecksumError<BDR::ReadError>> {
+) -> crate::Result<[u8; 32]> {
     let mut hasher = Sha3_256::new();
 
     let tree = volume.root_table.file_tree(dev)?;
     let mut iter: BTreeMap<String, DirectoryEntryNode> = BTreeMap::new();
 
     for (dir, file) in tree {
-        let name = file
-            .name_str()
-            .map_err(Into::<DirectoryTableWalkError<_>>::into);
-        let path = format!("{}/{}", dir, name?);
+        let path = format!("{}/{}", dir, file.name_str()?);
         iter.insert(path, file);
     }
 
@@ -42,7 +28,8 @@ pub fn checksum<BDR: BlockDeviceRead + ?Sized>(
         if !is_dir {
             file.node
                 .dirent
-                .read_data_chunks(dev, |chunk| hasher.update(chunk))?;
+                .read_data_chunks(dev, |chunk| hasher.update(chunk))
+                .map_err(|err| err.in_file(path.as_str()))?;
         }
     }
 

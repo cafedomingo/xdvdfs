@@ -1,4 +1,6 @@
-use crate::read::VolumeError;
+use std::io;
+
+use crate::Error;
 
 use super::{BlockDeviceRead, BlockDeviceWrite};
 
@@ -43,7 +45,7 @@ impl<T> OffsetWrapper<T>
 where
     T: BlockDeviceRead + Sized,
 {
-    pub fn new(dev: T) -> Result<Self, VolumeError<T::ReadError>> {
+    pub fn new(dev: T) -> crate::Result<Self> {
         let mut s = Self {
             inner: dev,
             offset: XDVDFSOffsets::default(),
@@ -52,17 +54,14 @@ where
         for offset in XDVDFSOffsets::ALL {
             s.offset = offset;
 
-            let vol = crate::read::read_volume(&mut s);
-            if vol.is_ok() {
-                return Ok(s);
+            match crate::read::read_volume(&mut s) {
+                Ok(_) => return Ok(s),
+                Err(Error::InvalidVolume) => {}
+                Err(err) => return Err(err),
             }
         }
 
-        Err(VolumeError::InvalidVolume)
-    }
-
-    pub fn new_with_provided_offset(dev: T, offset: XDVDFSOffsets) -> Self {
-        Self { inner: dev, offset }
+        Err(Error::InvalidVolume)
     }
 
     pub fn get_offset(&self) -> XDVDFSOffsets {
@@ -82,9 +81,7 @@ impl<T> BlockDeviceRead for OffsetWrapper<T>
 where
     T: BlockDeviceRead,
 {
-    type ReadError = T::ReadError;
-
-    fn read(&mut self, offset: u64, buffer: &mut [u8]) -> Result<(), Self::ReadError> {
+    fn read(&mut self, offset: u64, buffer: &mut [u8]) -> io::Result<()> {
         self.inner.read(offset + u64::from(self.offset), buffer)
     }
 }
@@ -93,13 +90,11 @@ impl<T> BlockDeviceWrite for OffsetWrapper<T>
 where
     T: BlockDeviceRead + BlockDeviceWrite,
 {
-    type WriteError = <T as BlockDeviceWrite>::WriteError;
-
-    fn write(&mut self, offset: u64, buffer: &[u8]) -> Result<(), Self::WriteError> {
+    fn write(&mut self, offset: u64, buffer: &[u8]) -> io::Result<()> {
         self.inner.write(offset + u64::from(self.offset), buffer)
     }
 
-    fn len(&mut self) -> Result<u64, Self::WriteError> {
+    fn len(&mut self) -> io::Result<u64> {
         self.inner.len()
     }
 }
@@ -121,10 +116,11 @@ where
 
 #[cfg(test)]
 mod test {
+    use std::io::Cursor;
+
     use crate::{
         blockdev::{BlockDeviceRead, BlockDeviceWrite, XDVDFSOffsets},
         layout::{DirectoryEntryTable, DiskRegion, VolumeDescriptor},
-        read::VolumeError,
         write::fs::{
             MemoryFilesystem, SectorLinearBlockDevice, SectorLinearBlockFilesystem,
             SectorLinearImage,
@@ -139,8 +135,8 @@ mod test {
         let mut fs = SectorLinearBlockFilesystem::new(MemoryFilesystem::default());
         let image = SectorLinearImage::new(&slbd, &mut fs);
 
-        let res = OffsetWrapper::new(image).err();
-        assert_eq!(res, Some(VolumeError::InvalidVolume));
+        let res = OffsetWrapper::new(image);
+        assert!(matches!(res, Err(crate::Error::InvalidVolume)));
     }
 
     #[test]
@@ -255,23 +251,23 @@ mod test {
 
     #[test]
     fn test_blockdev_offset_wrapper_write() {
-        let mut slbd = SectorLinearBlockDevice::default();
-        let mut fs = SectorLinearBlockFilesystem::new(MemoryFilesystem::default());
-        let image = SectorLinearImage::new(&mut slbd, &mut fs);
-        let mut wrapper = OffsetWrapper::new_with_provided_offset(image, XDVDFSOffsets::XGD1);
+        let mut wrapper = OffsetWrapper {
+            inner: Cursor::new(Vec::new()),
+            offset: XDVDFSOffsets::XGD3,
+        };
 
         let data = [1, 2, 3, 4, 5];
         wrapper.write(2048, &data).expect("Write should succeed");
 
-        let mut buffer = [0u8; 2048];
+        let mut buffer = [0u8; 5];
         wrapper
             .get_mut()
-            .read(405800960, &mut buffer)
+            .read(34080768, &mut buffer)
             .expect("Read should succeed");
-        assert_eq!(buffer[0..5], data);
+        assert_eq!(buffer, data);
 
         let len = wrapper.len().expect("Reading length should work");
-        assert_eq!(len, 405803008);
+        assert_eq!(len, 34080773);
     }
 }
 
@@ -285,8 +281,10 @@ mod test_std {
 
     #[test]
     fn test_blockdev_offset_wrapper_seek() {
-        let seeker = Cursor::new(Vec::new());
-        let mut wrapper = OffsetWrapper::new_with_provided_offset(seeker, XDVDFSOffsets::XGD1);
+        let mut wrapper = OffsetWrapper {
+            inner: Cursor::new(Vec::new()),
+            offset: XDVDFSOffsets::XGD1,
+        };
 
         let res = wrapper
             .seek(SeekFrom::Start(12345))

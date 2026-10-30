@@ -1,4 +1,4 @@
-use crate::{blockdev::BlockDeviceRead, layout::DirectoryEntryNode, read::DirectoryEntryReadError};
+use crate::{blockdev::BlockDeviceRead, layout::DirectoryEntryNode, Error};
 
 impl DirectoryEntryNode {
     /// Read a DirectoryEntryNode from disk, including
@@ -6,21 +6,19 @@ impl DirectoryEntryNode {
     pub fn read_from_disk<BDR: BlockDeviceRead + ?Sized>(
         dev: &mut BDR,
         offset: u64,
-    ) -> Result<Option<Self>, DirectoryEntryReadError<BDR::ReadError>> {
+    ) -> crate::Result<Option<Self>> {
         let mut dirent_buf = [0; 0xe];
-        dev.read(offset, &mut dirent_buf)
-            .map_err(DirectoryEntryReadError::IOError)?;
+        dev.read(offset, &mut dirent_buf)?;
 
-        let dirent = Self::deserialize(&dirent_buf, offset)
-            .map_err(|_| DirectoryEntryReadError::DeserializationFailed)?;
+        let dirent =
+            Self::deserialize(&dirent_buf, offset).map_err(|_| Error::DeserializationFailed)?;
         let Some(mut dirent) = dirent else {
             return Ok(None);
         };
 
         let name_len = dirent.node.dirent.filename_length as usize;
         let name_buf = &mut dirent.name[0..name_len];
-        dev.read(offset + 0xe, name_buf)
-            .map_err(DirectoryEntryReadError::IOError)?;
+        dev.read(offset + 0xe, name_buf)?;
 
         Ok(Some(dirent))
     }
@@ -37,14 +35,14 @@ mod test {
     fn test_read_dirent_node_from_disk_empty_ff_filled() {
         let mut data = [0xffu8; 0x10];
         let res = DirectoryEntryNode::read_from_disk(data.as_mut_slice(), 2);
-        assert_eq!(res, Ok(None));
+        assert!(matches!(res, Ok(None)));
     }
 
     #[test]
     fn test_read_dirent_node_from_disk_empty_zero_filled() {
         let mut data = [0x00u8; 0x10];
         let res = DirectoryEntryNode::read_from_disk(data.as_mut_slice(), 2);
-        assert_eq!(res, Ok(None));
+        assert!(matches!(res, Ok(None)));
     }
 
     #[test]

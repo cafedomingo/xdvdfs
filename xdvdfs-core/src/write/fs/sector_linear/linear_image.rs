@@ -1,8 +1,10 @@
 use core::ops::{Deref, DerefMut};
+use std::io;
 
-use crate::blockdev::{BlockDeviceRead, BlockDeviceWrite};
+use crate::blockdev::BlockDeviceRead;
 use crate::layout;
 use crate::write::fs::{FilesystemCopier, SectorLinearBlockDevice, SectorLinearBlockFilesystem};
+use crate::Error;
 
 use super::SectorLinearBlockRegion;
 
@@ -21,13 +23,13 @@ where
     }
 }
 
-impl<F, FSE, SLBD, SLBFS> SectorLinearImage<SLBD, SLBFS>
+impl<F, SLBD, SLBFS> SectorLinearImage<SLBD, SLBFS>
 where
-    F: FilesystemCopier<[u8], Error = FSE>,
+    F: FilesystemCopier<[u8]>,
     SLBD: Deref<Target = SectorLinearBlockDevice>,
     SLBFS: DerefMut<Target = SectorLinearBlockFilesystem<F>>,
 {
-    pub fn read_linear(&mut self, offset: u64, size: u64) -> Result<Vec<u8>, FSE> {
+    pub fn read_linear(&mut self, offset: u64, size: u64) -> crate::Result<Vec<u8>> {
         let mut sector = offset / (layout::SECTOR_SIZE as u64);
         let mut position = offset % (layout::SECTOR_SIZE as u64);
 
@@ -86,10 +88,6 @@ where
                         file_read as u64,
                     )?;
                 }
-                SectorLinearBlockRegion::Fill { byte, .. } if *byte != 0 => {
-                    buffer[index..(index + to_read)].fill(*byte);
-                }
-                SectorLinearBlockRegion::Fill { .. } => {}
             }
 
             index += to_read;
@@ -107,7 +105,7 @@ where
     SLBD: Deref<Target = SectorLinearBlockDevice> + Send + Sync,
     SLBFS: DerefMut<Target = SectorLinearBlockFilesystem<F>> + Send + Sync,
 {
-    type ReadError = F::Error;
+    type ReadError = crate::Error;
 
     fn size(&mut self) -> Result<u64, Self::ReadError> {
         Ok(self.linear.size())
@@ -130,31 +128,17 @@ where
     SLBD: Deref<Target = SectorLinearBlockDevice>,
     SLBFS: DerefMut<Target = SectorLinearBlockFilesystem<F>>,
 {
-    type ReadError = F::Error;
-
-    fn read(&mut self, offset: u64, buffer: &mut [u8]) -> Result<(), Self::ReadError> {
+    fn read(&mut self, offset: u64, buffer: &mut [u8]) -> io::Result<()> {
         let len = <[u8]>::len(buffer);
-        let mut data = self.read_linear(offset, len as u64)?;
+        let mut data = self
+            .read_linear(offset, len as u64)
+            .map_err(|err| match err {
+                Error::Io(err) => err,
+                err => io::Error::other(err),
+            })?;
         data.resize(len, 0);
         buffer.copy_from_slice(&data);
         Ok(())
-    }
-}
-
-impl<F, FSE, SLBD, SLBFS> BlockDeviceWrite for SectorLinearImage<SLBD, SLBFS>
-where
-    F: FilesystemCopier<[u8], Error = FSE>,
-    SLBD: DerefMut<Target = SectorLinearBlockDevice>,
-    SLBFS: DerefMut<Target = SectorLinearBlockFilesystem<F>>,
-{
-    type WriteError = core::convert::Infallible;
-
-    fn write(&mut self, offset: u64, buffer: &[u8]) -> Result<(), Self::WriteError> {
-        self.linear.write(offset, buffer)
-    }
-
-    fn len(&mut self) -> Result<u64, Self::WriteError> {
-        self.linear.len()
     }
 }
 
@@ -165,63 +149,15 @@ mod test {
     use super::{SectorLinearBlockDevice, SectorLinearBlockFilesystem, SectorLinearImage};
 
     #[test]
-    fn test_linear_image_read_zero_fill_entry() {
-        let memfs = MemoryFilesystem::default();
-        let mut slbd = SectorLinearBlockDevice::default();
-        let mut slbfs = SectorLinearBlockFilesystem::new(memfs);
-
-        slbd.contents.insert(
-            5,
-            SectorLinearBlockRegion::Fill {
-                byte: 0,
-                sectors: 2,
-            },
-        );
-
-        let mut image = SectorLinearImage::new(&slbd, &mut slbfs);
-        let data = image
-            .read_linear(5 * 2048, 2048)
-            .expect("Read should return data");
-        assert_eq!(data.len(), 2048);
-        assert_eq!(data, vec![0; 2048]);
-    }
-
-    #[test]
-    fn test_linear_image_read_nonzero_fill_entry() {
-        let memfs = MemoryFilesystem::default();
-        let mut slbd = SectorLinearBlockDevice::default();
-        let mut slbfs = SectorLinearBlockFilesystem::new(memfs);
-
-        slbd.contents.insert(
-            5,
-            SectorLinearBlockRegion::Fill {
-                byte: 0xff,
-                sectors: 2,
-            },
-        );
-
-        let mut image = SectorLinearImage::new(&slbd, &mut slbfs);
-        let data = image
-            .read_linear(5 * 2048, 2048)
-            .expect("Read should return data");
-        assert_eq!(data.len(), 2048);
-        assert_eq!(data, vec![0xff; 2048]);
-    }
-
-    #[test]
     fn test_linear_image_read_empty_image() {
         let memfs = MemoryFilesystem::default();
         let mut slbd = SectorLinearBlockDevice::default();
         let mut slbfs = SectorLinearBlockFilesystem::new(memfs);
 
         // Insert sector to give image size
-        slbd.contents.insert(
-            5,
-            SectorLinearBlockRegion::Fill {
-                byte: 0,
-                sectors: 2,
-            },
-        );
+        let data = vec![0; 2 * 2048];
+        slbd.contents
+            .insert(5, SectorLinearBlockRegion::RawData(data.into_boxed_slice()));
 
         let mut image = SectorLinearImage::new(&slbd, &mut slbfs);
         let data = image.read_linear(0, 2048).expect("Read should return data");
@@ -236,13 +172,9 @@ mod test {
         let mut slbfs = SectorLinearBlockFilesystem::new(memfs);
 
         // Insert sector to give image size
-        slbd.contents.insert(
-            0,
-            SectorLinearBlockRegion::Fill {
-                byte: 0,
-                sectors: 1,
-            },
-        );
+        let data = vec![0; 2048];
+        slbd.contents
+            .insert(0, SectorLinearBlockRegion::RawData(data.into_boxed_slice()));
 
         let mut image = SectorLinearImage::new(&slbd, &mut slbfs);
         let data = image.read_linear(0, 4096).expect("Read should return data");
@@ -275,13 +207,9 @@ mod test {
         let data = vec![10; 2048];
         slbd.contents
             .insert(0, SectorLinearBlockRegion::RawData(data.into_boxed_slice()));
-        slbd.contents.insert(
-            1,
-            SectorLinearBlockRegion::Fill {
-                byte: 0,
-                sectors: 1,
-            },
-        );
+        let data = vec![0; 2048];
+        slbd.contents
+            .insert(1, SectorLinearBlockRegion::RawData(data.into_boxed_slice()));
 
         let mut image = SectorLinearImage::new(&slbd, &mut slbfs);
         let data = image

@@ -1,57 +1,66 @@
-use thiserror::Error;
+use std::io;
 
 use crate::blockdev::BlockDeviceRead;
 use crate::layout::{VolumeDescriptor, SECTOR_SIZE_U64};
+use crate::Error;
 
-#[non_exhaustive]
-#[derive(Error, Debug, Copy, Clone, Eq, PartialEq)]
-pub enum VolumeError<E> {
-    #[error("io error")]
-    IOError(#[from] E),
-    #[error("not an xdvdfs volume")]
-    InvalidVolume,
-}
-
-/// Read the XDVDFS volume descriptor from sector 32 of the drive
-/// Returns None if the volume descriptor is invalid
+/// Read the XDVDFS volume descriptor from sector 32 of the drive.
+/// Errors with `InvalidVolume` if the device is too short to hold one or it
+/// is invalid.
 pub fn read_volume<BDR: BlockDeviceRead + ?Sized>(
     dev: &mut BDR,
-) -> Result<VolumeDescriptor, VolumeError<BDR::ReadError>> {
+) -> crate::Result<VolumeDescriptor> {
     let mut buffer = [0; core::mem::size_of::<VolumeDescriptor>()];
-
-    // FIXME: Implement some form of check to whether the IO
-    // error is a real error, or just indicates the volume is invalid
-    // (i.e. if the disk is not large enough to fit a volume descriptor)
-    // and propagate up the real error independently.
-    // For now just assume any read error means the volume is invalid.
     dev.read(32 * SECTOR_SIZE_U64, &mut buffer)
-        .map_err(|_| VolumeError::InvalidVolume)?;
+        .map_err(|err| match err.kind() {
+            io::ErrorKind::UnexpectedEof => Error::InvalidVolume,
+            _ => err.into(),
+        })?;
 
     VolumeDescriptor::deserialize(&buffer)
         .ok()
         .filter(VolumeDescriptor::is_valid)
-        .ok_or(VolumeError::InvalidVolume)
+        .ok_or(Error::InvalidVolume)
 }
 
 #[cfg(test)]
 mod test {
+    use std::io;
+
     use crate::{
-        blockdev::BlockDeviceWrite,
+        blockdev::{BlockDeviceRead, BlockDeviceWrite, OffsetWrapper},
         layout::{
             DirectoryEntryTable, DiskRegion, VolumeDescriptor, SECTOR_SIZE_U64, VOLUME_HEADER_MAGIC,
         },
-        read::{read_volume, VolumeError},
+        read::read_volume,
         write::fs::{
             MemoryFilesystem, SectorLinearBlockDevice, SectorLinearBlockFilesystem,
             SectorLinearImage,
         },
+        Error,
     };
 
     #[test]
     fn test_read_volume_from_disk_not_enough_disk_space() {
         let mut data = [0u8];
         let res = read_volume(data.as_mut_slice());
-        assert_eq!(res, Err(VolumeError::InvalidVolume));
+        assert!(matches!(res, Err(Error::InvalidVolume)));
+    }
+
+    #[test]
+    fn test_read_volume_propagates_io_errors() {
+        struct FailingDevice;
+
+        impl BlockDeviceRead for FailingDevice {
+            fn read(&mut self, _offset: u64, _buffer: &mut [u8]) -> io::Result<()> {
+                Err(io::Error::other("injected"))
+            }
+        }
+
+        let res = read_volume(&mut FailingDevice);
+        assert!(matches!(res, Err(Error::Io(_))), "{res:?}");
+        let res = OffsetWrapper::new(FailingDevice).map(|_| ());
+        assert!(matches!(res, Err(Error::Io(_))), "{res:?}");
     }
 
     #[test]
@@ -74,7 +83,7 @@ mod test {
 
         let mut dev = SectorLinearImage::new(&slbd, &mut slbfs);
         let res = read_volume(&mut dev);
-        assert_eq!(res, Err(VolumeError::InvalidVolume));
+        assert!(matches!(res, Err(Error::InvalidVolume)));
     }
 
     #[test]
@@ -92,13 +101,13 @@ mod test {
             .expect("Write should succeed");
 
         let mut dev = SectorLinearImage::new(&slbd, &mut slbfs);
-        let res = read_volume(&mut dev);
+        let res = read_volume(&mut dev).expect("Volume should be valid");
         let volume_expected = VolumeDescriptor::new(DirectoryEntryTable {
             region: DiskRegion {
                 sector: 10,
                 size: 20,
             },
         });
-        assert_eq!(res, Ok(volume_expected));
+        assert_eq!(res, volume_expected);
     }
 }

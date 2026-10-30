@@ -1,4 +1,4 @@
-use crate::img::open_image;
+use crate::img::{open_image, under_dir};
 use clap::Args;
 use md5::{Digest, Md5};
 use std::path::Path;
@@ -17,11 +17,19 @@ pub struct Md5Args {
 fn md5_file_dirent<BDR: BlockDeviceRead + ?Sized>(
     img: &mut BDR,
     file: xdvdfs::layout::DirectoryEntryNode,
+    path: &str,
 ) -> anyhow::Result<String> {
     let mut hasher = Md5::new();
-    file.node
-        .dirent
-        .read_data_chunks(img, |chunk| hasher.update(chunk))?;
+    let dirent = file.node.dirent;
+    dirent
+        .read_data_chunks(img, |chunk| hasher.update(chunk))
+        .map_err(|err| {
+            if dirent.is_directory() {
+                err.in_directory(path)
+            } else {
+                err.in_file(path)
+            }
+        })?;
     let result = hasher.finalize();
 
     Ok(format!("{result:x}"))
@@ -40,9 +48,9 @@ fn md5_file_tree<BDR: BlockDeviceRead + ?Sized>(
         } else {
             format!("{base}/{dir}")
         };
-        let checksum = md5_file_dirent(img, *file)?;
-        let name = file.name_str()?;
-        println!("{checksum}  {dir}/{name}");
+        let path = format!("{dir}/{}", file.name_str()?);
+        let checksum = md5_file_dirent(img, *file, &path)?;
+        println!("{checksum}  {path}");
     }
 
     Ok(())
@@ -55,10 +63,10 @@ fn md5_from_file_path<BDR: BlockDeviceRead + ?Sized>(
 ) -> anyhow::Result<()> {
     let dirent = volume.root_table.walk_path(img, file)?;
     if let Some(table) = dirent.node.dirent.dirent_table() {
-        let tree = table.file_tree(img)?;
+        let tree = table.file_tree(img).map_err(under_dir(file))?;
         md5_file_tree(img, &tree, file)?;
     } else {
-        let checksum = md5_file_dirent(img, dirent)?;
+        let checksum = md5_file_dirent(img, dirent, file)?;
         println!("{checksum}  {file}");
     }
 

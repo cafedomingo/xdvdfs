@@ -2,7 +2,8 @@ use crate::blockdev::BlockDeviceRead;
 use crate::layout::{
     DirectoryEntryNode, DirectoryEntryTable, SECTOR_SIZE, SECTOR_SIZE_U64, SECTOR_SIZE_USZ,
 };
-use crate::read::DirectoryEntryReadError;
+use crate::Error;
+use std::io;
 
 pub struct DirentScanIter<'a, BDR: BlockDeviceRead + ?Sized> {
     sector: usize,
@@ -13,7 +14,7 @@ pub struct DirentScanIter<'a, BDR: BlockDeviceRead + ?Sized> {
 }
 
 impl<BDR: BlockDeviceRead + ?Sized> DirentScanIter<'_, BDR> {
-    fn next_sector(&mut self) -> Result<(), BDR::ReadError> {
+    fn next_sector(&mut self) -> io::Result<()> {
         self.offset = 0;
         self.sector += 1;
 
@@ -23,14 +24,10 @@ impl<BDR: BlockDeviceRead + ?Sized> DirentScanIter<'_, BDR> {
         }
 
         self.dev
-            .read((self.sector as u64) * SECTOR_SIZE_U64, &mut self.sector_buf)?;
-
-        Ok(())
+            .read((self.sector as u64) * SECTOR_SIZE_U64, &mut self.sector_buf)
     }
 
-    pub fn next_entry(
-        &mut self,
-    ) -> Result<Option<DirectoryEntryNode>, DirectoryEntryReadError<BDR::ReadError>> {
+    pub fn next_entry(&mut self) -> crate::Result<Option<DirectoryEntryNode>> {
         if self.sector >= self.end_sector {
             return Ok(None);
         }
@@ -45,13 +42,12 @@ impl<BDR: BlockDeviceRead + ?Sized> DirentScanIter<'_, BDR> {
 
             let img_offset = (self.sector as u64 * SECTOR_SIZE_U64) + self.offset as u64;
             let dirent = DirectoryEntryNode::deserialize(&buf, img_offset)
-                .map_err(|_| DirectoryEntryReadError::DeserializationFailed)?;
+                .map_err(|_| Error::DeserializationFailed)?;
             let Some(mut dirent) = dirent else {
                 // If we find an empty record, but we still have sectors to go,
                 // advance the sector count and retry
                 if self.sector + 1 < self.end_sector {
-                    self.next_sector()
-                        .map_err(DirectoryEntryReadError::IOError)?;
+                    self.next_sector()?;
                     continue;
                 }
 
@@ -62,7 +58,7 @@ impl<BDR: BlockDeviceRead + ?Sized> DirentScanIter<'_, BDR> {
             let name = self
                 .sector_buf
                 .get(name_offset..(name_offset + name_len))
-                .ok_or(DirectoryEntryReadError::DeserializationFailed)?;
+                .ok_or(Error::DeserializationFailed)?;
             dirent.name[0..name_len].copy_from_slice(name);
 
             // Dirent is valid, advance cursor before returning
@@ -70,8 +66,7 @@ impl<BDR: BlockDeviceRead + ?Sized> DirentScanIter<'_, BDR> {
             self.offset += (4 - (self.offset % 4)) % 4;
 
             if self.offset + 0xe >= SECTOR_SIZE_USZ {
-                self.next_sector()
-                    .map_err(DirectoryEntryReadError::IOError)?;
+                self.next_sector()?;
             }
 
             break Ok(Some(dirent));
@@ -85,7 +80,7 @@ impl DirectoryEntryTable {
     pub fn scan_dirent_tree<'a, BDR: BlockDeviceRead + ?Sized>(
         &self,
         dev: &'a mut BDR,
-    ) -> Result<DirentScanIter<'a, BDR>, DirectoryEntryReadError<BDR::ReadError>> {
+    ) -> crate::Result<DirentScanIter<'a, BDR>> {
         let Ok(sector_offset) = self.offset(0) else {
             // Return a dummy scan iterator that is 0xff filled.
             // This is considered to be an empty sector, and avoids
@@ -100,8 +95,7 @@ impl DirectoryEntryTable {
         };
 
         let mut sector_buf = [0; SECTOR_SIZE_USZ];
-        dev.read(sector_offset, &mut sector_buf)
-            .map_err(DirectoryEntryReadError::IOError)?;
+        dev.read(sector_offset, &mut sector_buf)?;
 
         let sector = self.region.sector as usize;
         Ok(DirentScanIter {
@@ -122,7 +116,7 @@ mod test {
             DirectoryEntryDiskData, DirectoryEntryDiskNode, DirectoryEntryNode,
             DirectoryEntryTable, DirentAttributes, DiskRegion,
         },
-        read::{DirectoryEntryReadError, DirentScanIter},
+        read::DirentScanIter,
         write::{
             dirtab::{AvlDirectoryEntryTableBuilder, DirtabWriterBuffers},
             fs::{
@@ -131,6 +125,7 @@ mod test {
             },
             sector::SectorAllocator,
         },
+        Error,
     };
 
     fn name_bytes_from(name: &str) -> [u8; 256] {
@@ -161,7 +156,7 @@ mod test {
         ));
 
         let next = scan_iter.next_entry();
-        assert_eq!(next, Ok(None));
+        assert!(matches!(next, Ok(None)));
     }
 
     #[test]
@@ -188,7 +183,7 @@ mod test {
         ));
 
         let next = scan_iter.next_entry();
-        assert_eq!(next, Ok(None));
+        assert!(matches!(next, Ok(None)));
     }
 
     #[test]
@@ -225,7 +220,7 @@ mod test {
         }
 
         let next = iter.next_entry();
-        assert_eq!(next, Err(DirectoryEntryReadError::DeserializationFailed));
+        assert!(matches!(next, Err(Error::DeserializationFailed)));
     }
 
     #[test]

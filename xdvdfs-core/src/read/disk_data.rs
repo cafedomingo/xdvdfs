@@ -1,35 +1,10 @@
-use thiserror::Error;
-
-use crate::layout::{DirectoryEntryDiskData, OutOfBounds};
-
-#[non_exhaustive]
-#[derive(Error, Debug, Copy, Clone, Eq, PartialEq)]
-pub enum DiskDataReadError<E> {
-    #[error("io error")]
-    IOError(#[source] E),
-    #[error("offset out of bounds")]
-    SizeOutOfBounds(#[from] OutOfBounds),
-}
+use crate::layout::DirectoryEntryDiskData;
 
 /// Chunks this large keep reads from being syscall-bound, which they are
 /// with 8 KiB chunks.
 pub const DATA_CHUNK_LEN: usize = 1 << 20;
 
 impl DirectoryEntryDiskData {
-    pub fn read_data<BDR: crate::blockdev::BlockDeviceRead + ?Sized>(
-        &self,
-        dev: &mut BDR,
-        buf: &mut [u8],
-    ) -> Result<(), DiskDataReadError<BDR::ReadError>> {
-        if self.data.size == 0 {
-            return Ok(());
-        }
-
-        let offset = self.data.offset(0)?;
-        dev.read(offset, buf).map_err(DiskDataReadError::IOError)?;
-        Ok(())
-    }
-
     /// Reads the data front to back and passes it to `consume` in chunks of at
     /// most `DATA_CHUNK_LEN` bytes, so memory use doesn't depend on the size
     /// recorded in the image.
@@ -37,75 +12,32 @@ impl DirectoryEntryDiskData {
         &self,
         dev: &mut BDR,
         mut consume: impl FnMut(&[u8]),
-    ) -> Result<(), DiskDataReadError<BDR::ReadError>> {
+    ) -> crate::Result<()> {
         let size = u64::from(self.data.size);
         let mut chunk = vec![0; size.min(DATA_CHUNK_LEN as u64) as usize];
         let mut done = 0;
         while done < size {
             let len = (size - done).min(chunk.len() as u64) as usize;
             let offset = self.data.offset(done)?;
-            dev.read(offset, &mut chunk[..len])
-                .map_err(DiskDataReadError::IOError)?;
+            dev.read(offset, &mut chunk[..len])?;
             consume(&chunk[..len]);
             done += len as u64;
         }
         Ok(())
     }
 
-    pub fn seek_to(
-        &self,
-        seek: &mut impl std::io::Seek,
-    ) -> Result<u64, DiskDataReadError<std::io::Error>> {
+    pub fn seek_to(&self, seek: &mut impl std::io::Seek) -> crate::Result<u64> {
         use std::io::SeekFrom;
 
         let offset = self.data.offset(0)?;
-        let offset = seek
-            .seek(SeekFrom::Start(offset))
-            .map_err(DiskDataReadError::IOError)?;
-        Ok(offset)
+        Ok(seek.seek(SeekFrom::Start(offset))?)
     }
 }
 
 #[cfg(test)]
 mod test {
-    use super::{DiskDataReadError, DATA_CHUNK_LEN};
-    use crate::blockdev::ByteSliceOutOfBounds;
+    use super::DATA_CHUNK_LEN;
     use crate::layout::{DirectoryEntryDiskData, DirentAttributes, DiskRegion};
-
-    #[test]
-    fn test_layout_dirent_disk_data_read_data_empty() {
-        let mut data: [u8; 8] = [1; 8];
-
-        let dirent = DirectoryEntryDiskData {
-            data: DiskRegion { sector: 0, size: 0 },
-            attributes: DirentAttributes(0),
-            filename_length: 0,
-        };
-
-        let mut buf = [0; 8];
-        dirent.read_data(data.as_mut_slice(), &mut buf).unwrap();
-
-        assert_eq!(buf, [0; 8]);
-    }
-
-    #[test]
-    fn test_layout_dirent_disk_data_read_data_non_empty() {
-        let mut data: [u8; 10] = [1; 10];
-
-        let dirent = DirectoryEntryDiskData {
-            data: DiskRegion {
-                sector: 0,
-                size: 10,
-            },
-            attributes: DirentAttributes(0),
-            filename_length: 0,
-        };
-
-        let mut buf = [0; 8];
-        dirent.read_data(data.as_mut_slice(), &mut buf).unwrap();
-
-        assert_eq!(buf, [1; 8]);
-    }
 
     fn dirent(size: u32) -> DirectoryEntryDiskData {
         DirectoryEntryDiskData {
@@ -118,7 +50,7 @@ mod test {
     fn read_chunks(
         dirent: &DirectoryEntryDiskData,
         image: &mut [u8],
-    ) -> Result<Vec<Vec<u8>>, DiskDataReadError<ByteSliceOutOfBounds>> {
+    ) -> crate::Result<Vec<Vec<u8>>> {
         let mut chunks = Vec::new();
         dirent.read_data_chunks(image, |chunk| chunks.push(chunk.to_vec()))?;
         Ok(chunks)

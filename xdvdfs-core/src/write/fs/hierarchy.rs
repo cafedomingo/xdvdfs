@@ -35,7 +35,7 @@ pub struct DirectoryTreeEntry {
 pub fn dir_tree<FS: FilesystemHierarchy + ?Sized>(
     fs: &mut FS,
     directory_found_callback: &mut impl FnMut(usize),
-) -> Result<Vec<DirectoryTreeEntry>, FS::Error> {
+) -> crate::Result<Vec<DirectoryTreeEntry>> {
     let mut dirs: VecDeque<PathVec> = VecDeque::new();
     dirs.push_back(PathVec::default());
     let mut out = Vec::new();
@@ -72,15 +72,13 @@ pub fn dir_tree<FS: FilesystemHierarchy + ?Sized>(
 /// This trait allows for scanning a given directory within a filesystem
 /// for a list of its entries and entry metadata.
 pub trait FilesystemHierarchy {
-    type Error: core::error::Error + 'static;
-
     /// Read a directory, and return a list of entries within it
-    fn read_dir(&mut self, path: PathRef<'_>) -> Result<Vec<FileEntry>, Self::Error>;
+    fn read_dir(&mut self, path: PathRef<'_>) -> crate::Result<Vec<FileEntry>>;
 
     /// Clear any cached data built during operation
     /// After clearing the cache, function should behave as though the object
     /// has just been initialized.
-    fn clear_cache(&mut self) -> Result<(), Self::Error> {
+    fn clear_cache(&mut self) -> crate::Result<()> {
         Ok(())
     }
 }
@@ -90,13 +88,11 @@ where
     F: FilesystemHierarchy,
     FDeref: DerefMut<Target = F>,
 {
-    type Error = F::Error;
-
-    fn read_dir(&mut self, path: PathRef<'_>) -> Result<Vec<FileEntry>, Self::Error> {
+    fn read_dir(&mut self, path: PathRef<'_>) -> crate::Result<Vec<FileEntry>> {
         self.deref_mut().read_dir(path)
     }
 
-    fn clear_cache(&mut self) -> Result<(), Self::Error> {
+    fn clear_cache(&mut self) -> crate::Result<()> {
         self.deref_mut().clear_cache()
     }
 }
@@ -110,13 +106,11 @@ mod test {
     struct FSContainer<F: FilesystemHierarchy>(F);
 
     impl<F: FilesystemHierarchy> FilesystemHierarchy for FSContainer<F> {
-        type Error = F::Error;
-
-        fn read_dir(&mut self, path: PathRef<'_>) -> Result<Vec<FileEntry>, Self::Error> {
+        fn read_dir(&mut self, path: PathRef<'_>) -> crate::Result<Vec<FileEntry>> {
             self.0.read_dir(path)
         }
 
-        fn clear_cache(&mut self) -> Result<(), Self::Error> {
+        fn clear_cache(&mut self) -> crate::Result<()> {
             self.0.clear_cache()
         }
     }
@@ -129,19 +123,16 @@ mod test {
         let memfs = Box::new(memfs);
         let mut fs = FSContainer(memfs);
 
-        let res = fs.clear_cache();
-        assert_eq!(res, Ok(()));
+        fs.clear_cache().expect("Clearing the cache should succeed");
 
-        let res = fs.read_dir("/".into());
+        let res = fs.read_dir("/".into()).expect("read_dir should succeed");
         assert_eq!(
             res,
-            Ok([FileEntry {
+            [FileEntry {
                 name: "a".into(),
                 file_type: crate::write::fs::FileType::File,
                 len: 0,
-            },]
-            .as_slice()
-            .to_vec()),
+            }],
         );
     }
 
@@ -153,19 +144,16 @@ mod test {
         let mut memfs = Box::new(memfs);
         let mut fs = FSContainer(&mut memfs);
 
-        let res = fs.clear_cache();
-        assert_eq!(res, Ok(()));
+        fs.clear_cache().expect("Clearing the cache should succeed");
 
-        let res = fs.read_dir("/".into());
+        let res = fs.read_dir("/".into()).expect("read_dir should succeed");
         assert_eq!(
             res,
-            Ok([FileEntry {
+            [FileEntry {
                 name: "a".into(),
                 file_type: crate::write::fs::FileType::File,
                 len: 0,
-            },]
-            .as_slice()
-            .to_vec()),
+            }],
         );
     }
 }

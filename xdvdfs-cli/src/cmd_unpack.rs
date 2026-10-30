@@ -1,4 +1,4 @@
-use crate::img::open_image_raw;
+use crate::img::{open_image_raw, under_dir};
 use anyhow::{anyhow, ensure};
 use clap::Args;
 use std::{
@@ -42,12 +42,14 @@ fn extract_file(
     Ok(())
 }
 
+/// Copies out `dirtab`, the table of `dir` in the image
 fn copyout_directory(
     img: &mut OffsetWrapper<BufReader<File>>,
     dest_dir: &Path,
+    dir: &str,
     dirtab: &DirectoryEntryTable,
 ) -> anyhow::Result<()> {
-    let tree = dirtab.file_tree(img)?;
+    let tree = dirtab.file_tree(img).map_err(under_dir(dir))?;
 
     for (dir, dirent) in &tree {
         let dir = dir.trim_start_matches('/');
@@ -98,7 +100,7 @@ pub fn cmd_unpack(args: &UnpackArgs) -> Result<(), anyhow::Error> {
     let mut img = open_image_raw(Path::new(&args.image_path))?;
     let volume = xdvdfs::read::read_volume(&mut img)?;
 
-    copyout_directory(&mut img, &target_dir, &volume.root_table)
+    copyout_directory(&mut img, &target_dir, "/", &volume.root_table)
 }
 
 #[derive(Args)]
@@ -120,12 +122,12 @@ pub fn cmd_copyout(args: &CopyOutArgs) -> Result<(), anyhow::Error> {
 
     let volume = xdvdfs::read::read_volume(&mut img)?;
     if args.src_path == "/" {
-        return copyout_directory(&mut img, dest_path, &volume.root_table);
+        return copyout_directory(&mut img, dest_path, "/", &volume.root_table);
     }
 
     let dirent = volume.root_table.walk_path(&mut img, &args.src_path)?;
     if let Some(table) = dirent.node.dirent.dirent_table() {
-        return copyout_directory(&mut img, dest_path, &table);
+        return copyout_directory(&mut img, dest_path, &args.src_path, &table);
     }
 
     extract_file(&mut img, &dirent.node.dirent, dest_path)
