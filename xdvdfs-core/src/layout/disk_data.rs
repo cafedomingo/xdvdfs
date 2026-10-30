@@ -1,14 +1,10 @@
-use serde::{Deserialize, Serialize};
-
 use super::{DirectoryEntryTable, DirentAttributes, DiskRegion};
 
 /// On-disk representation of a directory entry tree data,
 /// excluding the left and right children.
 ///
 /// Does not include the file name or padding.
-#[repr(C)]
-#[repr(packed)]
-#[derive(Deserialize, Serialize, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct DirectoryEntryDiskData {
     pub data: DiskRegion,
     pub attributes: DirentAttributes,

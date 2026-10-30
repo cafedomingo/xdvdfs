@@ -18,21 +18,17 @@ impl DirectoryEntryNode {
     /// containing a DirectoryEntryDiskNode. This does not
     /// populate the dirent name. Returns None if the node
     /// is empty.
-    pub fn deserialize(
-        dirent_buf: &[u8; 0xe],
-        offset: u64,
-    ) -> Result<Option<Self>, bincode::Error> {
+    pub fn from_bytes(dirent_buf: &[u8; 0xe], offset: u64) -> Option<Self> {
         // Empty directory entries are filled with 0xff or 0x00
         if dirent_buf == &[0xff; 0xe] || dirent_buf == &[0x00; 0xe] {
-            return Ok(None);
+            return None;
         }
 
-        let node = DirectoryEntryDiskNode::deserialize(dirent_buf)?;
-        Ok(Some(Self {
-            node,
+        Some(Self {
+            node: DirectoryEntryDiskNode::from_bytes(dirent_buf),
             name: [0; 256],
             offset,
-        }))
+        })
     }
 
     pub fn name_slice(&self) -> &[u8] {
@@ -40,12 +36,11 @@ impl DirectoryEntryNode {
         &self.name[0..name_len]
     }
 
-    /// Returns the file name decoded to UTF-8, or an error if it can't be
-    /// decoded or isn't safe to use as a single path component.
+    /// Returns the file name decoded to UTF-8, or an error if it isn't safe
+    /// to use as a single path component.
     pub fn name_str(&self) -> crate::Result<Cow<'_, str>> {
-        let name = WINDOWS_1252
-            .decode_without_bom_handling_and_without_replacement(self.name_slice())
-            .ok_or(Error::InvalidNameEncoding)?;
+        // Windows-1252 decodes every byte, so this never flags an error
+        let (name, _) = WINDOWS_1252.decode_without_bom_handling(self.name_slice());
 
         if !is_safe_name(&name) {
             return Err(Error::UnsafeName(name.into_owned()));
@@ -67,15 +62,13 @@ mod test {
     #[test]
     fn test_layout_dirent_node_deserialize_empty_ff_filled() {
         let dirent_buf = [0xff; 0xe];
-        let dirent_node = DirectoryEntryNode::deserialize(&dirent_buf, 10);
-        assert!(dirent_node.is_ok_and(|node| node.is_none()));
+        assert_eq!(DirectoryEntryNode::from_bytes(&dirent_buf, 10), None);
     }
 
     #[test]
     fn test_layout_dirent_node_deserialize_empty_zero_filled() {
         let dirent_buf = [0x00; 0xe];
-        let dirent_node = DirectoryEntryNode::deserialize(&dirent_buf, 10);
-        assert!(dirent_node.is_ok_and(|node| node.is_none()));
+        assert_eq!(DirectoryEntryNode::from_bytes(&dirent_buf, 10), None);
     }
 
     #[test]
@@ -90,13 +83,12 @@ mod test {
         dirent_buf[12] = 0;
         dirent_buf[13] = 5;
 
-        let dirent_node = DirectoryEntryNode::deserialize(&dirent_buf, 10)
-            .expect("Node should deserialize correctly")
-            .expect("Node should be present");
-        assert_eq!({ dirent_node.node.left_entry_offset }, 257);
-        assert_eq!({ dirent_node.node.right_entry_offset }, 514);
-        assert_eq!({ dirent_node.node.dirent.data.sector }, 3);
-        assert_eq!({ dirent_node.node.dirent.data.size }, 4);
+        let dirent_node =
+            DirectoryEntryNode::from_bytes(&dirent_buf, 10).expect("Node should be present");
+        assert_eq!(dirent_node.node.left_entry_offset, 257);
+        assert_eq!(dirent_node.node.right_entry_offset, 514);
+        assert_eq!(dirent_node.node.dirent.data.sector, 3);
+        assert_eq!(dirent_node.node.dirent.data.size, 4);
         assert_eq!(dirent_node.node.dirent.attributes.attrs(), 0);
         assert_eq!(dirent_node.node.dirent.filename_length, 5);
         assert_eq!(dirent_node.offset, 10);

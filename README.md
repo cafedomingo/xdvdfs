@@ -48,6 +48,7 @@ xdvdfs pack <directory> [optional output path]
 ```
 
 This will create an iso that matches 1-to-1 with the input directory.
+File names are stored in Windows-1252, one byte per character, so a name can be up to 255 characters and can't use characters outside it, such as those in `日本.txt`.
 Symlinks are followed; a directory symlink that loops is an error. If packing fails, the error names the file at fault and any existing image at the output path is left untouched.
 
 #### Repacking an Image

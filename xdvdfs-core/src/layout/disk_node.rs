@@ -1,15 +1,10 @@
-use bincode::Options;
-use serde::{Deserialize, Serialize};
-
-use super::DirectoryEntryDiskData;
+use super::{DirectoryEntryDiskData, DirentAttributes, DiskRegion};
 
 /// On-disk representation of a directory entry tree node,
 /// including the left and right children, and data.
 ///
 /// Does not include the file name or padding.
-#[repr(C)]
-#[repr(packed)]
-#[derive(Deserialize, Serialize, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct DirectoryEntryDiskNode {
     pub left_entry_offset: u16,
     pub right_entry_offset: u16,
@@ -17,24 +12,26 @@ pub struct DirectoryEntryDiskNode {
 }
 
 impl DirectoryEntryDiskNode {
-    pub fn serialize(&self) -> Result<[u8; 0xe], bincode::Error> {
-        let mut buffer = [0u8; 0xe];
-        self.serialize_into(&mut buffer)?;
-        Ok(buffer)
+    pub fn from_bytes(buf: &[u8; 0xe]) -> Self {
+        Self {
+            left_entry_offset: u16::from_le_bytes(buf[0..2].try_into().unwrap()),
+            right_entry_offset: u16::from_le_bytes(buf[2..4].try_into().unwrap()),
+            dirent: DirectoryEntryDiskData {
+                data: DiskRegion::from_bytes(buf[4..12].try_into().unwrap()),
+                attributes: DirentAttributes(buf[12]),
+                filename_length: buf[13],
+            },
+        }
     }
 
-    pub fn serialize_into(&self, buf: &mut [u8]) -> Result<(), bincode::Error> {
-        bincode::DefaultOptions::new()
-            .with_fixint_encoding()
-            .with_little_endian()
-            .serialize_into(&mut buf[0..0xe], self)
-    }
-
-    pub fn deserialize(buf: &[u8; 0xe]) -> Result<Self, bincode::Error> {
-        bincode::DefaultOptions::new()
-            .with_fixint_encoding()
-            .with_little_endian()
-            .deserialize(buf)
+    pub fn to_bytes(&self) -> [u8; 0xe] {
+        let mut buf = [0; 0xe];
+        buf[0..2].copy_from_slice(&self.left_entry_offset.to_le_bytes());
+        buf[2..4].copy_from_slice(&self.right_entry_offset.to_le_bytes());
+        buf[4..12].copy_from_slice(&self.dirent.data.to_bytes());
+        buf[12] = self.dirent.attributes.0;
+        buf[13] = self.dirent.filename_length;
+        buf
     }
 }
 
@@ -45,7 +42,8 @@ mod test {
     use super::DirectoryEntryDiskNode;
 
     #[test]
-    fn test_layout_dirent_disk_node_serialize() {
+    fn test_layout_dirent_disk_node_bytes_roundtrip() {
+        let bytes: [u8; 0xe] = [1, 1, 2, 2, 1, 0, 0, 0, 2, 0, 0, 0, 255, 7];
         let node = DirectoryEntryDiskNode {
             left_entry_offset: 257,
             right_entry_offset: 514,
@@ -56,33 +54,7 @@ mod test {
             },
         };
 
-        let serialized = node.serialize().expect("Serialization should not fail");
-        assert_eq!(serialized[0..2], 257u16.to_le_bytes());
-        assert_eq!(serialized[2..4], 514u16.to_le_bytes());
-        assert_eq!(serialized[4..8], 1u32.to_le_bytes());
-        assert_eq!(serialized[8..12], 2u32.to_le_bytes());
-        assert_eq!(serialized[12], 255);
-        assert_eq!(serialized[13], 7);
-    }
-
-    #[test]
-    fn test_layout_dirent_disk_node_deserialize() {
-        let serialized: [u8; 0xe] = [1, 1, 2, 2, 1, 0, 0, 0, 2, 0, 0, 0, 255, 7];
-
-        let node = DirectoryEntryDiskNode::deserialize(&serialized)
-            .expect("Deserialization should not fail");
-
-        assert_eq!(
-            node,
-            DirectoryEntryDiskNode {
-                left_entry_offset: 257,
-                right_entry_offset: 514,
-                dirent: DirectoryEntryDiskData {
-                    data: DiskRegion { sector: 1, size: 2 },
-                    attributes: DirentAttributes(255),
-                    filename_length: 7,
-                },
-            }
-        );
+        assert_eq!(DirectoryEntryDiskNode::from_bytes(&bytes), node);
+        assert_eq!(node.to_bytes(), bytes);
     }
 }

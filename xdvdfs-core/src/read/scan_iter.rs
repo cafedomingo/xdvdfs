@@ -41,9 +41,7 @@ impl<BDR: BlockDeviceRead + ?Sized> DirentScanIter<'_, BDR> {
             buf.copy_from_slice(&self.sector_buf[self.offset..name_offset]);
 
             let img_offset = (self.sector as u64 * SECTOR_SIZE_U64) + self.offset as u64;
-            let dirent = DirectoryEntryNode::deserialize(&buf, img_offset)
-                .map_err(|_| Error::DeserializationFailed)?;
-            let Some(mut dirent) = dirent else {
+            let Some(mut dirent) = DirectoryEntryNode::from_bytes(&buf, img_offset) else {
                 // If we find an empty record, but we still have sectors to go,
                 // advance the sector count and retry
                 if self.sector + 1 < self.end_sector {
@@ -358,7 +356,7 @@ mod test {
             dtb.add_file(name, 10)
                 .expect("Dirent insertion should succeed");
         }
-        let mut dtb = dtb.build().expect("Building dirtab should succeed");
+        let mut dtb = dtb.build();
         let mut allocator = SectorAllocator::default();
         let mut buffers = DirtabWriterBuffers::default();
         dtb.disk_repr(&mut allocator, &mut buffers)

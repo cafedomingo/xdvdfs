@@ -1,6 +1,4 @@
-use crate::layout::DirentName;
-
-use super::{DirectoryEntryDiskData, DirentAttributes, DiskRegion};
+use super::{DirectoryEntryDiskData, DirentAttributes, DirentName, DiskRegion, NameError};
 
 /// In-memory structure to contain the on-disk dirent data,
 /// and file name information.
@@ -18,21 +16,19 @@ pub struct DirectoryEntryData<'alloc> {
 }
 
 impl<'alloc> DirectoryEntryData<'alloc> {
-    /// Returns `None` if `name` is longer than 255 bytes
     pub fn new_without_sector(
         name: &'alloc str,
         size: u32,
         attributes: DirentAttributes,
         idx: usize,
-    ) -> Option<Self> {
-        let filename_length = name.len().try_into().ok()?;
-        let name = DirentName::new(name);
+    ) -> Result<Self, NameError> {
+        let name = DirentName::new(name)?;
 
-        Some(Self {
+        Ok(Self {
             node: DirectoryEntryDiskData {
                 data: DiskRegion { sector: 0, size },
                 attributes,
-                filename_length,
+                filename_length: name.get_encoded_name().len() as u8,
             },
             name,
             idx,
@@ -41,10 +37,6 @@ impl<'alloc> DirectoryEntryData<'alloc> {
 
     pub fn get_name(&self) -> &str {
         self.name.get_name()
-    }
-
-    pub fn compute_len_and_name_encoding(&mut self) -> Option<u8> {
-        self.name.set_encode_name()
     }
 
     pub fn get_encoded_name(&self) -> &[u8] {

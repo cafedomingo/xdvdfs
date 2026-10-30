@@ -1,7 +1,7 @@
 use std::io;
 
 use crate::blockdev::BlockDeviceRead;
-use crate::layout::{VolumeDescriptor, SECTOR_SIZE_U64};
+use crate::layout::{VolumeDescriptor, SECTOR_SIZE_U64, SECTOR_SIZE_USZ};
 use crate::Error;
 
 /// Read the XDVDFS volume descriptor from sector 32 of the drive.
@@ -10,17 +10,18 @@ use crate::Error;
 pub fn read_volume<BDR: BlockDeviceRead + ?Sized>(
     dev: &mut BDR,
 ) -> crate::Result<VolumeDescriptor> {
-    let mut buffer = [0; core::mem::size_of::<VolumeDescriptor>()];
+    let mut buffer = [0; SECTOR_SIZE_USZ];
     dev.read(32 * SECTOR_SIZE_U64, &mut buffer)
         .map_err(|err| match err.kind() {
             io::ErrorKind::UnexpectedEof => Error::InvalidVolume,
             _ => err.into(),
         })?;
 
-    VolumeDescriptor::deserialize(&buffer)
-        .ok()
-        .filter(VolumeDescriptor::is_valid)
-        .ok_or(Error::InvalidVolume)
+    let volume = VolumeDescriptor::from_bytes(&buffer);
+    if !volume.is_valid() {
+        return Err(Error::InvalidVolume);
+    }
+    Ok(volume)
 }
 
 #[cfg(test)]

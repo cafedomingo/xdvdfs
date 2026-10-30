@@ -421,14 +421,6 @@ impl<T: Ord> AvlTree<T> {
         AvlPreorderIter { stack, tree: self }
     }
 
-    pub fn fold_mut<V>(&mut self, mut acc: V, mut f: impl FnMut(V, &mut T) -> V) -> V {
-        for node in self.tree.iter_mut() {
-            acc = f(acc, &mut node.data);
-        }
-
-        acc
-    }
-
     pub fn backing_vec(&self) -> &Vec<AvlNode<T>> {
         &self.tree
     }
@@ -616,28 +608,5 @@ mod test {
 
         let iter = tree.preorder_iter();
         assert_eq!(iter.size_hint(), (6, Some(6)));
-    }
-
-    #[test]
-    fn test_avl_tree_fold_mut() {
-        let test_set = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-
-        let mut tree = AvlTree::default();
-        tree.reserve(10);
-
-        for i in test_set {
-            tree.insert(i);
-            tree.validate_tree();
-        }
-
-        let val = tree.fold_mut(0, |mut acc, elem| {
-            acc += *elem;
-            *elem += 1;
-            acc
-        });
-        assert_eq!(val, 55);
-
-        let data: Vec<i32> = tree.backing_vec().iter().map(|x| x.data).collect();
-        assert_eq!(data, &[2, 3, 4, 5, 6, 7, 8, 9, 10, 11,]);
     }
 }

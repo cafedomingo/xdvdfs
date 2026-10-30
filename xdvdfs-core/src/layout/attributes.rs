@@ -1,22 +1,61 @@
 use core::fmt::Display;
 
-use proc_bitfield::bitfield;
-use serde::{Deserialize, Serialize};
+/// The attribute byte of a directory entry
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub struct DirentAttributes(pub u8);
 
-bitfield!(
-#[repr(C)]
-#[derive(Deserialize, Serialize, Copy, Clone, Eq, PartialEq, Hash)]
-pub struct DirentAttributes(pub u8): Debug {
-    pub attrs: u8 @ ..,
+impl DirentAttributes {
+    const READ_ONLY: u8 = 0x01;
+    const HIDDEN: u8 = 0x02;
+    const SYSTEM: u8 = 0x04;
+    const DIRECTORY: u8 = 0x10;
+    const ARCHIVE: u8 = 0x20;
+    const NORMAL: u8 = 0x80;
 
-    pub read_only: bool @ 0,
-    pub hidden: bool @ 1,
-    pub system: bool @ 2,
-    pub directory: bool @ 4,
-    pub archive: bool @ 5,
-    pub normal: bool @ 7,
+    pub fn attrs(self) -> u8 {
+        self.0
+    }
+
+    fn has(self, bit: u8) -> bool {
+        self.0 & bit != 0
+    }
+
+    fn with(self, bit: u8, set: bool) -> Self {
+        Self(if set { self.0 | bit } else { self.0 & !bit })
+    }
+
+    pub fn read_only(self) -> bool {
+        self.has(Self::READ_ONLY)
+    }
+
+    pub fn hidden(self) -> bool {
+        self.has(Self::HIDDEN)
+    }
+
+    pub fn system(self) -> bool {
+        self.has(Self::SYSTEM)
+    }
+
+    pub fn directory(self) -> bool {
+        self.has(Self::DIRECTORY)
+    }
+
+    pub fn archive(self) -> bool {
+        self.has(Self::ARCHIVE)
+    }
+
+    pub fn normal(self) -> bool {
+        self.has(Self::NORMAL)
+    }
+
+    pub fn with_directory(self, directory: bool) -> Self {
+        self.with(Self::DIRECTORY, directory)
+    }
+
+    pub fn with_archive(self, archive: bool) -> Self {
+        self.with(Self::ARCHIVE, archive)
+    }
 }
-);
 
 fn print_leading_space(f: &mut core::fmt::Formatter<'_>, has_prev: &mut bool) -> core::fmt::Result {
     if *has_prev {

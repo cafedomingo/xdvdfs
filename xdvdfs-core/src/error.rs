@@ -16,8 +16,6 @@ pub enum Error {
     DeserializationFailed,
     #[error("offset {offset} out of bounds for file of size {size}")]
     OutOfBounds { offset: u64, size: u32 },
-    #[error("failed to deserialize file name into utf-8")]
-    InvalidNameEncoding,
     #[error("unsafe file name {0:?}")]
     UnsafeName(String),
     #[error("directory entries loop or share a table")]
@@ -39,15 +37,13 @@ pub enum Error {
     #[error("path \"{0}\" not found")]
     NotFound(ImagePath),
 
-    #[error("serialization failed")]
-    SerializationFailed,
     #[error("{0}: name matches another in its directory (Xbox names ignore case); rename it")]
     DuplicateFileName(ImagePath),
     #[error("too many entries in a single directory")]
     TooManyDirectoryEntries,
     #[error("{0}: file is too large for an Xbox image (must be under 4 GiB)")]
     FileTooLarge(ImagePath),
-    #[error("{0}: name is longer than an Xbox image allows (255 bytes); rename it")]
+    #[error("{0}: name is longer than an Xbox image allows (255 Windows-1252 bytes); rename it")]
     FileNameTooLong(ImagePath),
     #[error("{0}: name can't be stored in an Xbox image (Windows-1252); rename it")]
     FileNameNotEncodable(ImagePath),
