@@ -15,6 +15,7 @@ use tempfile::tempdir;
 use xdvdfs::blockdev::XDVDFSOffsets;
 use xdvdfs::layout::DirectoryEntryDiskNode;
 use xdvdfs::read::DATA_CHUNK_LEN;
+use xdvdfs::write::fs::SYSTEM_UPDATE_DIR;
 use xdvdfs::xbe::{MEDIA_CHECK, MEDIA_CHECK_PATCH};
 
 // 0xe header bytes plus the name make 32-byte dirents, so table sizes
@@ -114,6 +115,13 @@ fn tree(img: &Path) -> String {
     let out = xdvdfs(&["tree".as_ref(), img.as_ref()]);
     assert_success(&out);
     String::from_utf8(out.stdout).unwrap()
+}
+
+/// `tree`'s lines for the image's entries, without its totals line, which names the image
+fn tree_entries(img: &Path) -> Vec<String> {
+    let mut lines: Vec<_> = tree(img).lines().map(str::to_owned).collect();
+    lines.pop();
+    lines
 }
 
 fn checksum(img: &Path) -> String {
@@ -747,6 +755,21 @@ fn pack_media_patch() {
     }
 }
 
+/// Checks `md5` of `cso` lists each of `expected`, and returns what it printed
+fn assert_md5_lists(cso: &Path, expected: &[(&str, Vec<u8>)]) -> String {
+    let out = xdvdfs(&["md5".as_ref(), cso.as_ref()]);
+    assert_success(&out);
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    for (name, data) in expected {
+        let line = format!("{}  /{name}", md5_hex(data));
+        assert!(
+            stdout.lines().any(|printed| printed == line),
+            "md5 printed:\n{stdout}"
+        );
+    }
+    stdout
+}
+
 #[test]
 fn compress_media_patch() {
     let work = tempdir().unwrap();
@@ -760,16 +783,136 @@ fn compress_media_patch() {
         cso.as_ref(),
     ]);
 
-    let out = xdvdfs(&["md5".as_ref(), work.path().join("out.1.cso").as_ref()]);
-    assert_success(&out);
-    let stdout = String::from_utf8(out.stdout).unwrap();
-    for (name, data) in &expected {
-        let line = format!("{}  /{name}", md5_hex(data));
+    assert_md5_lists(&work.path().join("out.1.cso"), &expected);
+}
+
+/// Writes `src` with a `$SystemUpdate` folder at the root and another, in a
+/// different case, below it, and `expected` with the rest.
+fn system_update_trees(work: &Path) -> (PathBuf, PathBuf) {
+    let kept: &[(&str, &[u8])] = &[
+        ("default.xbe", b"xbe"),
+        ("data/game.bin", &[7; SECTOR_LEN + 1]),
+    ];
+    let src = work.join("src");
+    let expected = work.join("expected");
+    write_tree(&expected, kept, &[]);
+    write_tree(&src, kept, &[]);
+    write_tree(
+        &src,
+        &[
+            ("$SystemUpdate/su20076000_00000000", b"update"),
+            ("data/$SYSTEMUPDATE/x", b"x"),
+        ],
+        &[],
+    );
+    (src, expected)
+}
+
+#[test]
+fn pack_skip_system_update() {
+    let work = tempdir().unwrap();
+    let (src, expected) = system_update_trees(work.path());
+    let expected_img = work.path().join("expected.xiso");
+    pack(&expected, &expected_img);
+    let plain = work.path().join("plain.xiso");
+    pack(&src, &plain);
+    assert!(tree(&plain).contains(SYSTEM_UPDATE_DIR));
+
+    for (i, source) in [&src, &plain].into_iter().enumerate() {
+        let img = work.path().join(format!("skipped{i}.xiso"));
+        run(&[
+            "pack".as_ref(),
+            "--skip-system-update".as_ref(),
+            source.as_ref(),
+            img.as_ref(),
+        ]);
         assert!(
-            stdout.lines().any(|printed| printed == line),
-            "md5 printed:\n{stdout}"
+            fs::read(&img).unwrap() == fs::read(&expected_img).unwrap(),
+            "packed from {}",
+            source.display()
         );
     }
+}
+
+#[test]
+fn compress_skip_system_update() {
+    let work = tempdir().unwrap();
+    let (src, expected) = system_update_trees(work.path());
+    let expected_img = work.path().join("expected.xiso");
+    pack(&expected, &expected_img);
+    let plain = work.path().join("plain.cso");
+    compress(&src, &plain);
+    assert!(tree(&work.path().join("plain.1.cso")).contains(SYSTEM_UPDATE_DIR));
+
+    let cso = work.path().join("out.cso");
+    run(&[
+        "compress".as_ref(),
+        "--skip-system-update".as_ref(),
+        src.as_ref(),
+        cso.as_ref(),
+    ]);
+    assert_eq!(
+        tree_entries(&work.path().join("out.1.cso")),
+        tree_entries(&expected_img)
+    );
+}
+
+#[test]
+fn unpack_skip_system_update() {
+    let work = tempdir().unwrap();
+    let (src, expected) = system_update_trees(work.path());
+    let img = work.path().join("img.xiso");
+    pack(&src, &img);
+    assert_unpacks_to(&img, &src);
+
+    let out = tempdir().unwrap();
+    run(&[
+        "unpack".as_ref(),
+        "--skip-system-update".as_ref(),
+        img.as_ref(),
+        out.path().as_ref(),
+    ]);
+    assert_trees_equal(&expected, out.path());
+}
+
+#[test]
+fn media_patch_with_skip_system_update() {
+    let work = tempdir().unwrap();
+    let src = work.path().join("src");
+    let expected = media_check_tree(&src);
+    write_tree(&src, &[("$SystemUpdate/update.xbe", b"update")], &[]);
+
+    let img = work.path().join("img.xiso");
+    run(&[
+        "pack".as_ref(),
+        "--media-patch".as_ref(),
+        "--skip-system-update".as_ref(),
+        src.as_ref(),
+        img.as_ref(),
+    ]);
+    let out = tempdir().unwrap();
+    unpack(&img, out.path());
+    assert_eq!(
+        names_in(out.path()),
+        ["GAME.XBE", "default.xbe", "other.bin"]
+    );
+    for (name, data) in &expected {
+        assert!(fs::read(out.path().join(name)).unwrap() == *data, "{name}");
+    }
+
+    let cso = work.path().join("out.cso");
+    run(&[
+        "compress".as_ref(),
+        "--media-patch".as_ref(),
+        "--skip-system-update".as_ref(),
+        src.as_ref(),
+        cso.as_ref(),
+    ]);
+    let listing = assert_md5_lists(&work.path().join("out.1.cso"), &expected);
+    assert!(
+        !listing.contains(SYSTEM_UPDATE_DIR),
+        "md5 printed:\n{listing}"
+    );
 }
 
 #[test]

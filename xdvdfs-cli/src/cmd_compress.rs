@@ -10,14 +10,13 @@ use clap::Args;
 
 use xdvdfs::write::{
     fs::{
-        DefaultCopier, FilesystemCopier, FilesystemHierarchy, MediaPatchFilesystem,
-        SectorLinearBlockDevice, SectorLinearBlockFilesystem, SectorLinearImage, StdFilesystem,
-        XDVDFSFilesystem,
+        DefaultCopier, FilesystemCopier, FilesystemHierarchy, SectorLinearBlockDevice,
+        SectorLinearBlockFilesystem, SectorLinearImage, StdFilesystem, XDVDFSFilesystem,
     },
     img::{ProgressInfo, create_xdvdfs_image},
 };
 
-use crate::cmd_pack::{MEDIA_PATCH_HELP, default_image_path};
+use crate::cmd_pack::{SourceOptions, default_image_path};
 use crate::img::{absolute_path, open_image_raw};
 use crate::progress::print_progress;
 use crate::split::{FATX_SPLIT_SIZE, SplitOutput};
@@ -31,8 +30,8 @@ pub struct CompressArgs {
     #[arg(help = "Path to output image")]
     image_path: Option<String>,
 
-    #[arg(long, help = MEDIA_PATCH_HELP)]
-    media_patch: bool,
+    #[command(flatten)]
+    source_options: SourceOptions,
 }
 
 pub fn cmd_compress(args: &CompressArgs) -> Result<(), anyhow::Error> {
@@ -46,7 +45,7 @@ pub fn cmd_compress(args: &CompressArgs) -> Result<(), anyhow::Error> {
     };
 
     let mut output = SplitOutput::new(&source_path, &image_path);
-    match write_parts(&source_path, &meta, args.media_patch, &mut output) {
+    match write_parts(&source_path, &meta, args, &mut output) {
         Ok(parts) => output.finish(parts),
         Err(err) => {
             output.remove_partials();
@@ -58,7 +57,7 @@ pub fn cmd_compress(args: &CompressArgs) -> Result<(), anyhow::Error> {
 fn write_parts(
     source_path: &Path,
     meta: &Metadata,
-    media_patch: bool,
+    args: &CompressArgs,
     output: &mut SplitOutput,
 ) -> Result<Vec<BufWriter<File>>, anyhow::Error> {
     let source_prefix = if meta.is_dir() {
@@ -78,34 +77,19 @@ fn write_parts(
 
     if meta.is_dir() {
         let fs = StdFilesystem::create(source_path);
-        compress(fs, media_patch, output, progress)
+        write_cso(fs, args, output, progress)
     } else if meta.is_file() {
         let source = open_image_raw(source_path)?;
         let fs = XDVDFSFilesystem::<_, [u8], DefaultCopier<_, _>>::new(source)?;
-        compress(fs, media_patch, output, progress)
+        write_cso(fs, args, output, progress)
     } else {
         bail!("Source must be a directory or an image file");
     }
 }
 
-fn compress<F>(
-    fs: F,
-    media_patch: bool,
-    output: &mut SplitOutput,
-    progress: impl FnMut(ProgressInfo),
-) -> Result<Vec<BufWriter<File>>, anyhow::Error>
-where
-    F: FilesystemHierarchy + FilesystemCopier<[u8]>,
-{
-    if media_patch {
-        write_cso(MediaPatchFilesystem::new(fs), output, progress)
-    } else {
-        write_cso(fs, output, progress)
-    }
-}
-
 fn write_cso<F>(
     fs: F,
+    args: &CompressArgs,
     output: &mut SplitOutput,
     progress: impl FnMut(ProgressInfo),
 ) -> Result<Vec<BufWriter<File>>, anyhow::Error>
@@ -116,7 +100,7 @@ where
     let mut first = output.create_part(1)?;
 
     let mut slbd = SectorLinearBlockDevice::default();
-    let mut slbfs = SectorLinearBlockFilesystem::new(fs);
+    let mut slbfs = SectorLinearBlockFilesystem::new(args.source_options.wrap(fs));
     create_xdvdfs_image(&mut slbfs, &mut slbd, progress)?;
 
     let len = slbd.size();
