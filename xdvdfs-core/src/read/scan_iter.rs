@@ -117,7 +117,7 @@ mod test {
         },
         read::DirentScanIter,
         write::{
-            dirtab::{AvlDirectoryEntryTableBuilder, DirtabWriterBuffers},
+            dirtab::DirectoryEntryTableBuilder,
             fs::{
                 MemoryFilesystem, SectorLinearBlockDevice, SectorLinearBlockFilesystem,
                 SectorLinearImage,
@@ -351,17 +351,17 @@ mod test {
             entry_names.push(format!("{i:02x}"));
         }
 
-        let mut dtb = AvlDirectoryEntryTableBuilder::default();
+        let mut dtb = DirectoryEntryTableBuilder::default();
         for name in &entry_names {
             dtb.add_file(name, 10)
                 .expect("Dirent insertion should succeed");
         }
-        let mut dtb = dtb.build();
+        let mut dtb = dtb.build().expect("Building dirtab should succeed");
         let mut allocator = SectorAllocator::default();
-        let mut buffers = DirtabWriterBuffers::default();
-        dtb.disk_repr(&mut allocator, &mut buffers)
+        let mut dirtab_bytes = Vec::new();
+        dtb.disk_repr(&mut allocator, &mut dirtab_bytes)
             .expect("Serializing dirtab should succeed");
-        assert_eq!(buffers.dirtab_bytes.len(), 4096);
+        assert_eq!(dirtab_bytes.len(), 4096);
 
         let table = DirectoryEntryTable {
             region: DiskRegion {
@@ -371,7 +371,7 @@ mod test {
         };
 
         let mut iter = table
-            .scan_dirent_tree(buffers.dirtab_bytes.as_mut_slice())
+            .scan_dirent_tree(dirtab_bytes.as_mut_slice())
             .expect("Creating iter should succeed");
 
         let mut name_set = HashSet::new();

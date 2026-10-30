@@ -2,23 +2,29 @@ use crate::Error;
 use crate::layout::{
     self, DirectoryEntryData, DirectoryEntryDiskNode, DirentAttributes, NameError, is_safe_name,
 };
-use crate::write::avl;
 use crate::write::fs::ImagePath;
 
-use super::avl::AvlNode;
 use super::sector::{SectorAllocator, required_sectors};
 
 #[derive(Default)]
-pub struct AvlDirectoryEntryTableBuilder<'alloc> {
+pub struct DirectoryEntryTableBuilder<'alloc> {
     /// The directory this table lists, to name entries in errors
     dir: ImagePath,
-    table: avl::AvlTree<DirectoryEntryData<'alloc>>,
+    entries: Vec<DirectoryEntryData<'alloc>>,
+}
+
+struct TreeNode<'alloc> {
+    entry: DirectoryEntryData<'alloc>,
+    left: Option<usize>,
+    right: Option<usize>,
 }
 
 /// Writer for directory entry tables
-pub struct AvlDirectoryEntryTableWriter<'alloc> {
-    table: avl::AvlTree<DirectoryEntryData<'alloc>>,
-    size: u32,
+pub struct DirectoryEntryTableWriter<'alloc> {
+    /// A balanced search tree in preorder, the order entries are laid out in the table
+    nodes: Vec<TreeNode<'alloc>>,
+    /// Each node's byte offset in the table
+    offsets: Vec<u32>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -28,13 +34,6 @@ pub struct FileListingEntry<'alloc> {
     pub size: u64,
     pub is_dir: bool,
     pub idx: usize,
-}
-
-#[derive(Default)]
-pub struct DirtabWriterBuffers {
-    pub dirtab_bytes: Vec<u8>,
-    avl_idx_to_dirtab_offset: Vec<u32>,
-    avl_idx_to_sector: Vec<u32>,
 }
 
 /// Returns alignment needed to ensure an entry at a given sector offset and size
@@ -53,23 +52,20 @@ fn sector_align(offset: u32, size: u32) -> u32 {
     }
 }
 
-/// Compute offsets from the start of the dirent sector
-/// for each entry, given as an iterator of pairs, where the second
-/// element is the file size of the entry.
-/// The offset is a partial sum of entry sizes. The first element in the pair
-/// allows the iterator to pass other items through for later use.
-fn compute_offsets<T>(iter: impl Iterator<Item = (T, u32)>) -> impl Iterator<Item = (T, u32)> {
-    iter.scan(0u32, |state, (val, file_size)| {
-        // If this file does not fit at its offset, place it on a new sector
-        *state += sector_align(*state, file_size);
+/// Compute each entry's offset from the start of the table, given each
+/// entry's length on disk. The offset is a partial sum of entry lengths.
+fn compute_offsets(lens: impl Iterator<Item = u32>) -> impl Iterator<Item = u32> {
+    lens.scan(0u32, |state, len| {
+        // If this entry does not fit at its offset, place it on a new sector
+        *state += sector_align(*state, len);
         let curr_offset = *state;
 
-        *state += file_size;
-        Some((val, curr_offset))
+        *state += len;
+        Some(curr_offset)
     })
 }
 
-fn avl_index_to_offset(index: Option<usize>, offsets: &[u32]) -> crate::Result<u16> {
+fn child_offset(index: Option<usize>, offsets: &[u32]) -> crate::Result<u16> {
     index
         .map(|idx| offsets[idx] / 4)
         .unwrap_or_default()
@@ -86,8 +82,8 @@ fn dirent_data_to_disk_node(
 ) -> crate::Result<DirectoryEntryDiskNode> {
     let mut dirent = data.node;
 
-    let left_entry_offset = avl_index_to_offset(left_child_index, offsets)?;
-    let right_entry_offset = avl_index_to_offset(right_child_index, offsets)?;
+    let left_entry_offset = child_offset(left_child_index, offsets)?;
+    let right_entry_offset = child_offset(right_child_index, offsets)?;
     dirent.data.sector = sector;
 
     Ok(DirectoryEntryDiskNode {
@@ -104,11 +100,30 @@ fn serialize_dirent_disk_node(table: &mut [u8], dirent: DirectoryEntryDiskNode, 
     table[0xe..(0xe + name_len)].copy_from_slice(&name_bytes[0..name_len]);
 }
 
-impl<'alloc> AvlDirectoryEntryTableBuilder<'alloc> {
+/// Appends a balanced tree of `sorted` to `nodes` in preorder,
+/// and returns the index of its root
+fn push_subtree<'alloc>(
+    sorted: &[DirectoryEntryData<'alloc>],
+    nodes: &mut Vec<TreeNode<'alloc>>,
+) -> Option<usize> {
+    let mid = sorted.len() / 2;
+    let idx = nodes.len();
+    nodes.push(TreeNode {
+        entry: sorted.get(mid)?.clone(),
+        left: None,
+        right: None,
+    });
+
+    nodes[idx].left = push_subtree(&sorted[..mid], nodes);
+    nodes[idx].right = push_subtree(&sorted[mid + 1..], nodes);
+    Some(idx)
+}
+
+impl<'alloc> DirectoryEntryTableBuilder<'alloc> {
     pub fn new(dir: ImagePath) -> Self {
         Self {
             dir,
-            table: avl::AvlTree::default(),
+            entries: Vec::new(),
         }
     }
 
@@ -129,10 +144,8 @@ impl<'alloc> AvlDirectoryEntryTableBuilder<'alloc> {
             Err(NameError::TooLong) => return Err(Error::FileNameTooLong(path())),
             Err(NameError::NotEncodable) => return Err(Error::FileNameNotEncodable(path())),
         };
-        self.table
-            .insert(dirent)
-            .then_some(())
-            .ok_or_else(|| Error::DuplicateFileName(path()))
+        self.entries.push(dirent);
+        Ok(())
     }
 
     pub fn add_dir(&mut self, name: &'alloc str, size: u32, idx: usize) -> crate::Result<()> {
@@ -148,133 +161,76 @@ impl<'alloc> AvlDirectoryEntryTableBuilder<'alloc> {
     }
 
     pub fn reserve(&mut self, size: usize) {
-        self.table.reserve(size);
+        self.entries.reserve(size);
     }
 
-    pub fn build(self) -> AvlDirectoryEntryTableWriter<'alloc> {
-        AvlDirectoryEntryTableWriter::new(self)
+    pub fn build(mut self) -> crate::Result<DirectoryEntryTableWriter<'alloc>> {
+        self.entries.sort();
+        if let Some([_, later]) = self.entries.array_windows().find(|[a, b]| a.cmp(b).is_eq()) {
+            return Err(Error::DuplicateFileName(self.dir.join(later.get_name())));
+        }
+
+        let mut nodes = Vec::with_capacity(self.entries.len());
+        push_subtree(&self.entries, &mut nodes);
+        Ok(DirectoryEntryTableWriter::new(nodes))
     }
 }
 
-impl<'alloc> AvlDirectoryEntryTableWriter<'alloc> {
-    fn new(builder: AvlDirectoryEntryTableBuilder<'alloc>) -> Self {
-        let size = builder
-            .table
-            .preorder_iter()
-            .map(|node| node.len_on_disk())
-            .fold(0, |acc: u32, disk_len: u32| {
-                acc + disk_len + sector_align(acc, disk_len)
-            });
-        Self {
-            table: builder.table,
-            size,
-        }
+impl<'alloc> DirectoryEntryTableWriter<'alloc> {
+    fn new(nodes: Vec<TreeNode<'alloc>>) -> Self {
+        let offsets = compute_offsets(nodes.iter().map(|node| node.entry.len_on_disk())).collect();
+        Self { nodes, offsets }
     }
 
     /// Returns the size of the directory entry table, in bytes.
     pub fn dirtab_size(&self) -> u32 {
+        let last = self.nodes.last().zip(self.offsets.last());
         // FS bug: zero sized dirents are listed as size 2048
-        if self.table.backing_vec().is_empty() {
-            2048
-        } else {
-            self.size
-        }
+        last.map_or(2048, |(node, offset)| offset + node.entry.len_on_disk())
     }
 
     /// Iterate over the FileListingEntries within the directory entry table.
     /// Sector will be zero until it is computed by `disk_repr`.
     pub fn iter(&self) -> impl Iterator<Item = FileListingEntry<'_>> {
-        self.table
-            .backing_vec()
+        self.nodes
             .iter()
-            .map(|node| FileListingEntry {
-                name: node.data().get_name(),
-                sector: node.data().node.data.sector as u64,
-                size: node.data().node.data.size as u64,
-                is_dir: node.data().node.is_directory(),
-                idx: node.data().idx,
+            .map(|TreeNode { entry, .. }| FileListingEntry {
+                name: entry.get_name(),
+                sector: entry.node.data.sector as u64,
+                size: entry.node.data.size as u64,
+                is_dir: entry.node.is_directory(),
+                idx: entry.idx,
             })
     }
 
-    /// Construct an array of offsets and sectors for each entry in the table
-    /// Each offset is a partial sum of lengths of the dirent on disk,
-    /// computed in preorder, then unmapped to backing order.
-    fn compute_dirtab_offsets_and_sector(
-        &self,
-        allocator: &mut SectorAllocator,
-        avl_idx_to_dirtab_offset: &mut Vec<u32>,
-        avl_idx_to_sector: &mut Vec<u32>,
-    ) {
-        avl_idx_to_dirtab_offset.resize(self.table.len(), 0);
-        avl_idx_to_sector.resize(self.table.len(), 0);
-
-        let preorder_idx_file_size_iter = self.table.preorder_iter().map(|node| {
-            (
-                (node.backing_index(), node.node.data.size),
-                node.len_on_disk(),
-            )
-        });
-
-        for ((backing_idx, size), offset) in compute_offsets(preorder_idx_file_size_iter) {
-            avl_idx_to_dirtab_offset[backing_idx] = offset;
-            avl_idx_to_sector[backing_idx] = allocator.allocate_contiguous(size as u64);
-        }
-    }
-
-    fn write_dirtab_entry(
-        dirtab_bytes: &mut [u8],
-        node_idx: usize,
-        node: &AvlNode<DirectoryEntryData<'_>>,
-        avl_idx_to_dirtab_offset: &[u32],
-        sector: u32,
-    ) -> crate::Result<()> {
-        let name_bytes = node.data().get_encoded_name();
-        let dirent = dirent_data_to_disk_node(
-            node.data(),
-            node.left_idx(),
-            node.right_idx(),
-            avl_idx_to_dirtab_offset,
-            sector,
-        )?;
-
-        let offset = avl_idx_to_dirtab_offset[node_idx] as usize;
-        serialize_dirent_disk_node(&mut dirtab_bytes[offset..], dirent, name_bytes);
-
-        Ok(())
-    }
-
-    /// Serializes directory entry table to a on-disk representation,
-    /// and copies the directory table and all entries into the image.
-    ///
-    /// Working memory is factored out into DirtabWriterBuffers for
-    /// reuse in subsequent calls.
+    /// Allocates sectors for the table's entries and serializes the table
+    /// into `dirtab_bytes`, which can be reused across tables.
     pub fn disk_repr(
         &mut self,
         allocator: &mut SectorAllocator,
-        buffers: &mut DirtabWriterBuffers,
+        dirtab_bytes: &mut Vec<u8>,
     ) -> crate::Result<()> {
-        let DirtabWriterBuffers {
-            dirtab_bytes,
-            avl_idx_to_dirtab_offset,
-            avl_idx_to_sector,
-        } = buffers;
-
-        self.compute_dirtab_offsets_and_sector(
-            allocator,
-            avl_idx_to_dirtab_offset,
-            avl_idx_to_sector,
-        );
-
         let size = self.dirtab_size().next_multiple_of(layout::SECTOR_SIZE) as usize;
 
         dirtab_bytes.fill(0xff);
         dirtab_bytes.resize(size, 0xff);
 
-        for (idx, node) in self.table.backing_vec_mut().iter_mut().enumerate() {
-            let sector = avl_idx_to_sector[idx];
-            node.data_mut().node.data.sector = sector;
+        for (node, &offset) in self.nodes.iter_mut().zip(&self.offsets) {
+            let sector = allocator.allocate_contiguous(node.entry.node.data.size as u64);
+            node.entry.node.data.sector = sector;
 
-            Self::write_dirtab_entry(dirtab_bytes, idx, node, avl_idx_to_dirtab_offset, sector)?;
+            let dirent = dirent_data_to_disk_node(
+                &node.entry,
+                node.left,
+                node.right,
+                &self.offsets,
+                sector,
+            )?;
+            serialize_dirent_disk_node(
+                &mut dirtab_bytes[offset as usize..],
+                dirent,
+                node.entry.get_encoded_name(),
+            );
         }
 
         Ok(())
@@ -286,17 +242,18 @@ mod test {
     use crate::{
         Error,
         layout::DirectoryEntryDiskNode,
-        write::{
-            dirtab::{DirtabWriterBuffers, FileListingEntry},
-            fs::ImagePath,
-            sector::SectorAllocator,
-        },
+        write::{dirtab::FileListingEntry, fs::ImagePath, sector::SectorAllocator},
     };
 
+    use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
+
     use super::{
-        AvlDirectoryEntryTableBuilder, avl_index_to_offset, compute_offsets,
+        DirectoryEntryTableBuilder, TreeNode, child_offset, compute_offsets,
         dirent_data_to_disk_node, sector_align, serialize_dirent_disk_node,
     };
+    use crate::layout::cmp_ignore_case_utf8;
+
+    const SHUFFLE_SEED: u64 = 0x5842_4f58_5842_4f58;
 
     #[test]
     fn test_sector_align_offset_aligned() {
@@ -318,19 +275,13 @@ mod test {
 
     #[test]
     fn test_compute_offsets_single_sector() {
-        let sizes: &mut [u32] = &mut [100, 100, 100, 100];
-        let offsets: Vec<u32> = compute_offsets(sizes.iter().map(|x| ((), *x)))
-            .map(|x| x.1)
-            .collect();
+        let offsets: Vec<u32> = compute_offsets([100, 100, 100, 100].into_iter()).collect();
         assert_eq!(offsets, &[0, 100, 200, 300,]);
     }
 
     #[test]
     fn test_compute_offsets_multiple_sectors() {
-        let sizes: &mut [u32] = &mut [252, 252, 252, 252, 252, 252, 252, 252, 252, 252];
-        let offsets: Vec<u32> = compute_offsets(sizes.iter().map(|x| ((), *x)))
-            .map(|x| x.1)
-            .collect();
+        let offsets: Vec<u32> = compute_offsets([252; 10].into_iter()).collect();
         assert_eq!(
             offsets,
             &[
@@ -342,24 +293,24 @@ mod test {
     }
 
     #[test]
-    fn test_avl_index_to_offset_leaf() {
+    fn test_child_offset_leaf() {
         let offsets = &[0, 100, 200];
-        let offset = avl_index_to_offset(None, offsets).expect("Offset should fit");
+        let offset = child_offset(None, offsets).expect("Offset should fit");
         assert_eq!(offset, 0);
     }
 
     #[test]
-    fn test_avl_index_to_offset_node() {
+    fn test_child_offset_node() {
         let offsets = &[0, 100, 200];
-        let offset = avl_index_to_offset(Some(1), offsets).expect("Offset should fit");
+        let offset = child_offset(Some(1), offsets).expect("Offset should fit");
         assert_eq!(offset, 25);
     }
 
     #[test]
-    fn test_avl_index_to_offset_out_of_range() {
+    fn test_child_offset_out_of_range() {
         let offsets = &[0, 100, 262144];
         assert!(matches!(
-            avl_index_to_offset(Some(2), offsets),
+            child_offset(Some(2), offsets),
             Err(Error::TooManyDirectoryEntries)
         ));
     }
@@ -461,37 +412,37 @@ mod test {
 
     #[test]
     fn test_dirtab_writer_empty_size_computation() {
-        let writer = AvlDirectoryEntryTableBuilder::default();
-        let writer = writer.build();
+        let writer = DirectoryEntryTableBuilder::default();
+        let writer = writer.build().unwrap();
 
         assert_eq!(writer.dirtab_size(), 2048);
     }
 
     #[test]
     fn test_dirtab_writer_single_directory_size_computation() {
-        let mut writer = AvlDirectoryEntryTableBuilder::default();
+        let mut writer = DirectoryEntryTableBuilder::default();
         writer.add_dir("test", 30, 1234).unwrap();
 
-        let writer = writer.build();
+        let writer = writer.build().unwrap();
         assert_eq!(writer.dirtab_size(), 0xe + 4 + 2);
     }
 
     #[test]
     fn test_dirtab_writer_single_file_size_computation() {
-        let mut writer = AvlDirectoryEntryTableBuilder::default();
+        let mut writer = DirectoryEntryTableBuilder::default();
         writer.add_file("test", 30).unwrap();
 
-        let writer = writer.build();
+        let writer = writer.build().unwrap();
         assert_eq!(writer.dirtab_size(), 0xe + 4 + 2);
     }
 
     #[test]
     fn test_dirtab_writer_multiple_entry_size_computation_without_realignment() {
-        let mut writer = AvlDirectoryEntryTableBuilder::default();
+        let mut writer = DirectoryEntryTableBuilder::default();
         writer.add_file("file", 30).unwrap();
         writer.add_dir("dir", 30, 1234).unwrap();
 
-        let writer = writer.build();
+        let writer = writer.build().unwrap();
 
         let dirent_len = 2 * 0xe;
         let filename_len = 4 + 3;
@@ -501,7 +452,7 @@ mod test {
 
     #[test]
     fn test_dirtab_writer_multiple_entry_size_computation_with_realignment() {
-        let mut writer = AvlDirectoryEntryTableBuilder::default();
+        let mut writer = DirectoryEntryTableBuilder::default();
 
         // Add 103 files with name length '6'
         // Each dirent is of length 20, with a total over 2048
@@ -510,7 +461,7 @@ mod test {
             writer.add_file(name, 10).unwrap();
         }
 
-        let writer = writer.build();
+        let writer = writer.build().unwrap();
 
         let dirent_len = 103 * 0xe;
         let filename_len = 103 * 6;
@@ -520,37 +471,37 @@ mod test {
 
     #[test]
     fn test_dirtab_writer_serialize_empty_directory() {
-        let writer = AvlDirectoryEntryTableBuilder::default();
-        let mut writer = writer.build();
+        let writer = DirectoryEntryTableBuilder::default();
+        let mut writer = writer.build().unwrap();
         let mut allocator = SectorAllocator::default();
 
-        let mut buffers = DirtabWriterBuffers::default();
-        let res = writer.disk_repr(&mut allocator, &mut buffers);
+        let mut dirtab_bytes = Vec::new();
+        let res = writer.disk_repr(&mut allocator, &mut dirtab_bytes);
         assert!(res.is_ok());
 
         // Empty tables are '0xff' filled
-        assert_eq!(buffers.dirtab_bytes, vec![0xffu8; 2048]);
+        assert_eq!(dirtab_bytes, vec![0xffu8; 2048]);
         assert!(writer.iter().next().is_none());
     }
 
     #[test]
     fn test_dirtab_writer_serialize_single_file() {
-        let mut writer = AvlDirectoryEntryTableBuilder::default();
+        let mut writer = DirectoryEntryTableBuilder::default();
         writer.add_file("test", 10).unwrap();
 
-        let mut writer = writer.build();
+        let mut writer = writer.build().unwrap();
         let mut allocator = SectorAllocator::default();
 
-        let mut buffers = DirtabWriterBuffers::default();
-        let res = writer.disk_repr(&mut allocator, &mut buffers);
+        let mut dirtab_bytes = Vec::new();
+        let res = writer.disk_repr(&mut allocator, &mut dirtab_bytes);
         assert!(res.is_ok());
 
         assert_eq!(
-            &buffers.dirtab_bytes[0..0xe],
+            &dirtab_bytes[0..0xe],
             &[0, 0, 0, 0, 33, 0, 0, 0, 10, 0, 0, 0, 32, 4,]
         );
-        assert_eq!(&buffers.dirtab_bytes[0xe..(0xe + 4)], "test".as_bytes());
-        assert_eq!(&buffers.dirtab_bytes[(0xe + 4)..], &vec![0xff; 2030]);
+        assert_eq!(&dirtab_bytes[0xe..(0xe + 4)], "test".as_bytes());
+        assert_eq!(&dirtab_bytes[(0xe + 4)..], &vec![0xff; 2030]);
 
         let file_listing: Vec<_> = writer.iter().collect();
         assert_eq!(
@@ -567,24 +518,24 @@ mod test {
 
     #[test]
     fn test_dirtab_writer_serialize_single_dir() {
-        let mut writer = AvlDirectoryEntryTableBuilder::default();
+        let mut writer = DirectoryEntryTableBuilder::default();
         writer.add_dir("test", 20, 1234).unwrap();
 
-        let mut writer = writer.build();
+        let mut writer = writer.build().unwrap();
         let mut allocator = SectorAllocator::default();
-        let mut buffers = DirtabWriterBuffers::default();
-        let res = writer.disk_repr(&mut allocator, &mut buffers);
+        let mut dirtab_bytes = Vec::new();
+        let res = writer.disk_repr(&mut allocator, &mut dirtab_bytes);
         assert!(res.is_ok());
 
         assert_eq!(
-            &buffers.dirtab_bytes[0..0xe],
+            &dirtab_bytes[0..0xe],
             &[
                 0, 0, 0, 0, 33, 0, 0, 0, 0, 8, 0, 0, // Dir is padded up to 2048 in size
                 16, 4,
             ]
         );
-        assert_eq!(&buffers.dirtab_bytes[0xe..(0xe + 4)], "test".as_bytes());
-        assert_eq!(&buffers.dirtab_bytes[(0xe + 4)..], &vec![0xff; 2030]);
+        assert_eq!(&dirtab_bytes[0xe..(0xe + 4)], "test".as_bytes());
+        assert_eq!(&dirtab_bytes[(0xe + 4)..], &vec![0xff; 2030]);
 
         let file_listing: Vec<_> = writer.iter().collect();
         assert_eq!(
@@ -601,26 +552,23 @@ mod test {
 
     #[test]
     fn test_dirtab_writer_serialize_tree_entries() {
-        let mut writer = AvlDirectoryEntryTableBuilder::default();
+        let mut writer = DirectoryEntryTableBuilder::default();
         writer.add_dir("t1", 20, 1).unwrap();
         writer.add_dir("t2", 20, 2).unwrap();
         writer.add_dir("t3", 20, 3).unwrap();
 
-        let mut writer = writer.build();
+        let mut writer = writer.build().unwrap();
         let mut allocator = SectorAllocator::default();
-        let mut buffers = DirtabWriterBuffers::default();
-        let res = writer.disk_repr(&mut allocator, &mut buffers);
+        let mut dirtab_bytes = Vec::new();
+        let res = writer.disk_repr(&mut allocator, &mut dirtab_bytes);
         assert!(res.is_ok());
 
         let entry_size: usize = 0xe + 2;
 
-        assert_eq!(&buffers.dirtab_bytes[0..4], &[4, 0, 8, 0]);
+        assert_eq!(&dirtab_bytes[0..4], &[4, 0, 8, 0]);
+        assert_eq!(&dirtab_bytes[entry_size..(entry_size + 4)], &[0, 0, 0, 0]);
         assert_eq!(
-            &buffers.dirtab_bytes[entry_size..(entry_size + 4)],
-            &[0, 0, 0, 0]
-        );
-        assert_eq!(
-            &buffers.dirtab_bytes[(2 * entry_size)..(2 * entry_size + 4)],
+            &dirtab_bytes[(2 * entry_size)..(2 * entry_size + 4)],
             &[0, 0, 0, 0]
         );
 
@@ -629,18 +577,18 @@ mod test {
             file_listing,
             &[
                 FileListingEntry {
-                    name: "t1",
-                    sector: 34,
-                    size: 2048,
-                    is_dir: true,
-                    idx: 1,
-                },
-                FileListingEntry {
                     name: "t2",
                     sector: 33,
                     size: 2048,
                     is_dir: true,
                     idx: 2,
+                },
+                FileListingEntry {
+                    name: "t1",
+                    sector: 34,
+                    size: 2048,
+                    is_dir: true,
+                    idx: 1,
                 },
                 FileListingEntry {
                     name: "t3",
@@ -655,7 +603,7 @@ mod test {
 
     #[test]
     fn test_dirtab_writer_serialize_entry_sector_alignment() {
-        let mut writer = AvlDirectoryEntryTableBuilder::default();
+        let mut writer = DirectoryEntryTableBuilder::default();
 
         // Add 103 files with name length '6'
         // Each dirent is of length 20, with a total over 2048
@@ -664,34 +612,109 @@ mod test {
             writer.add_file(name, 10).unwrap();
         }
 
-        let mut writer = writer.build();
+        let mut writer = writer.build().unwrap();
         let mut allocator = SectorAllocator::default();
-        let mut buffers = DirtabWriterBuffers::default();
-        let res = writer.disk_repr(&mut allocator, &mut buffers);
+        let mut dirtab_bytes = Vec::new();
+        let res = writer.disk_repr(&mut allocator, &mut dirtab_bytes);
         assert!(res.is_ok());
 
         let entry_size: usize = 0xe + 6;
         let aligned_entry_offset: usize = entry_size * 102;
         assert_eq!(
-            &buffers.dirtab_bytes[aligned_entry_offset..(aligned_entry_offset + 8)],
+            &dirtab_bytes[aligned_entry_offset..(aligned_entry_offset + 8)],
             &vec![0xff; 8]
         );
     }
 
+    /// Checks the subtree at `idx` is balanced, appends its names in order,
+    /// and returns its height
+    fn check_subtree<'a>(
+        nodes: &'a [TreeNode],
+        idx: Option<usize>,
+        names: &mut Vec<&'a str>,
+    ) -> usize {
+        let Some(node) = idx.map(|idx| &nodes[idx]) else {
+            return 0;
+        };
+        let left = check_subtree(nodes, node.left, names);
+        names.push(node.entry.get_name());
+        let right = check_subtree(nodes, node.right, names);
+        assert!(
+            left.abs_diff(right) <= 1,
+            "{} is unbalanced",
+            node.entry.get_name()
+        );
+        1 + left.max(right)
+    }
+
     #[test]
-    fn test_dirtab_writer_reject_duplicate_names() {
-        let mut writer = AvlDirectoryEntryTableBuilder::default();
-        writer.add_file("t1", 10).unwrap();
+    fn test_balanced_tree_shape() {
+        let mut builder = DirectoryEntryTableBuilder::default();
+        for name in ["E", "A", "G", "C", "B", "F", "D"] {
+            builder.add_file(name, 10).unwrap();
+        }
+        let writer = builder.build().unwrap();
+
+        let name = |idx: Option<usize>| idx.map(|idx| writer.nodes[idx].entry.get_name());
+        let preorder: Vec<_> = writer
+            .nodes
+            .iter()
+            .map(|node| (node.entry.get_name(), name(node.left), name(node.right)))
+            .collect();
+        assert_eq!(
+            preorder,
+            [
+                ("D", Some("B"), Some("F")),
+                ("B", Some("A"), Some("C")),
+                ("A", None, None),
+                ("C", None, None),
+                ("F", Some("E"), Some("G")),
+                ("E", None, None),
+                ("G", None, None),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_tree_balanced_and_ordered() {
+        let mut rng = StdRng::seed_from_u64(SHUFFLE_SEED);
+        for len in 1..=200 {
+            let mut sorted: Vec<_> = (0..len)
+                .map(|i| format!("{}{i}", ["a", "B", "a_", "A-b"][i % 4]))
+                .collect();
+            sorted.sort_by(|a, b| cmp_ignore_case_utf8(a, b));
+            let mut shuffled = sorted.clone();
+            shuffled.shuffle(&mut rng);
+
+            let mut builder = DirectoryEntryTableBuilder::default();
+            for name in &shuffled {
+                builder.add_file(name, 10).unwrap();
+            }
+            let writer = builder.build().unwrap();
+
+            // The reader starts its search at the table's first entry
+            let mut inorder = Vec::new();
+            check_subtree(&writer.nodes, Some(0), &mut inorder);
+            assert_eq!(inorder, sorted, "{len} entries");
+        }
+    }
+
+    #[test]
+    fn test_duplicate_names_rejected() {
+        let mut builder = DirectoryEntryTableBuilder::new(ImagePath::from("/dir"));
+        builder.add_file("a.txt", 10).unwrap();
+        builder.add_file("b.txt", 10).unwrap();
+        builder.add_dir("A.TXT", 20, 1234).unwrap();
         assert!(matches!(
-            writer.add_dir("t1", 20, 1234),
-            Err(Error::DuplicateFileName(path)) if path == ImagePath::from("t1")
+            builder.build(),
+            Err(Error::DuplicateFileName(path)) if path == ImagePath::from("/dir/A.TXT")
         ));
     }
 
     #[test]
     fn test_dirtab_writer_reject_long_name() {
         let long_name: String = core::iter::repeat_n('a', 260).collect();
-        let mut writer = AvlDirectoryEntryTableBuilder::default();
+        let mut writer = DirectoryEntryTableBuilder::default();
         assert!(matches!(
             writer.add_dir(&long_name, 20, 1234),
             Err(Error::FileNameTooLong(path)) if path == ImagePath::from(long_name.as_str())
@@ -701,15 +724,15 @@ mod test {
     #[test]
     fn test_dirtab_writer_name_len_is_encoded_len() {
         let name = "é".repeat(130);
-        let mut writer = AvlDirectoryEntryTableBuilder::default();
+        let mut writer = DirectoryEntryTableBuilder::default();
         writer.add_file(&name, 10).unwrap();
 
-        assert_eq!(writer.build().dirtab_size(), 0xe + 130);
+        assert_eq!(writer.build().unwrap().dirtab_size(), 0xe + 130);
     }
 
     #[test]
     fn test_dirtab_writer_reject_unsafe_name() {
-        let mut writer = AvlDirectoryEntryTableBuilder::new(ImagePath::from("/dir"));
+        let mut writer = DirectoryEntryTableBuilder::new(ImagePath::from("/dir"));
         for name in ["a:b", "a\\b"] {
             assert!(
                 matches!(
@@ -724,7 +747,7 @@ mod test {
 
     #[test]
     fn test_dirtab_writer_unencodable_name_names_path() {
-        let mut writer = AvlDirectoryEntryTableBuilder::new(ImagePath::from("/dir"));
+        let mut writer = DirectoryEntryTableBuilder::new(ImagePath::from("/dir"));
         assert!(matches!(
             writer.add_file("日本.txt", 10),
             Err(Error::FileNameNotEncodable(path)) if path == ImagePath::from("/dir/日本.txt")

@@ -2,23 +2,21 @@ use crate::blockdev::BlockDeviceWrite;
 use crate::layout;
 use crate::write::{fs, sector};
 
-use super::dirtab::{
-    AvlDirectoryEntryTableBuilder, AvlDirectoryEntryTableWriter, DirtabWriterBuffers,
-};
+use super::dirtab::{DirectoryEntryTableBuilder, DirectoryEntryTableWriter};
 use super::fs::{DirectoryTreeEntry, FilesystemCopier, FilesystemHierarchy, ImagePath};
 use crate::Error;
 
 pub use super::progress_info::*;
 
 struct DirentTableVec<'a> {
-    dirent_tables: Vec<(&'a ImagePath, AvlDirectoryEntryTableWriter<'a>)>,
+    dirent_tables: Vec<(&'a ImagePath, DirectoryEntryTableWriter<'a>)>,
     count: usize,
 }
 
 fn create_dirent_tables<'a>(
     dirtree: &'a [DirectoryTreeEntry],
 ) -> crate::Result<DirentTableVec<'a>> {
-    let mut dirent_tables: Vec<(&ImagePath, AvlDirectoryEntryTableWriter<'a>)> =
+    let mut dirent_tables: Vec<(&ImagePath, DirectoryEntryTableWriter<'a>)> =
         Vec::with_capacity(dirtree.len());
     let mut dtab_size_map: Vec<u32> = vec![0u32; dirtree.len()];
     let mut count = 0;
@@ -27,7 +25,7 @@ fn create_dirent_tables<'a>(
         let path = &entry.dir;
         let dir_entries = &entry.listing;
 
-        let mut dirtab = AvlDirectoryEntryTableBuilder::new(path.clone());
+        let mut dirtab = DirectoryEntryTableBuilder::new(path.clone());
         dirtab.reserve(dir_entries.len());
 
         for (entry, dir_index) in dir_entries {
@@ -55,7 +53,7 @@ fn create_dirent_tables<'a>(
         // Store index of directory in dirent_tables in the dtab_size_map,
         // then pass it through the dirtab writer so it can be used as to look-up
         // sectors in the forward pass.
-        let dtw = dirtab.build();
+        let dtw = dirtab.build()?;
 
         dtab_size_map[dir_idx] = dtw.dirtab_size();
         dirent_tables.push((path, dtw));
@@ -89,7 +87,6 @@ where
         root_dirtab_size: u32,
         root_dirtab_sector: u32,
     ) -> crate::Result<()> {
-        // FIXME: Set timestamp
         let root_table = layout::DirectoryEntryTable::new(root_dirtab_size, root_dirtab_sector);
         let volume_info = layout::VolumeDescriptor::new(root_table).to_bytes();
         self.image
@@ -144,18 +141,16 @@ where
         let root_sector = sector_allocator.allocate_contiguous(root_dirtab_size as u64);
         dir_sectors[0] = root_sector as u64;
 
-        let mut dtw_buffers = DirtabWriterBuffers::default();
+        let mut dirtab_bytes = Vec::new();
 
         for (dir_idx, (path, mut dirtab)) in dirent_tables.into_iter().rev().enumerate() {
             let dirtab_sector = dir_sectors[dir_idx];
             self.progress_visitor.directory_added(path, dirtab_sector);
 
-            dirtab.disk_repr(&mut sector_allocator, &mut dtw_buffers)?;
+            dirtab.disk_repr(&mut sector_allocator, &mut dirtab_bytes)?;
 
-            self.image.write(
-                dirtab_sector * layout::SECTOR_SIZE as u64,
-                &dtw_buffers.dirtab_bytes,
-            )?;
+            self.image
+                .write(dirtab_sector * layout::SECTOR_SIZE as u64, &dirtab_bytes)?;
 
             for entry in dirtab.iter() {
                 let file_path = path.join(entry.name);
@@ -208,14 +203,51 @@ mod test {
     use crate::layout;
     use crate::write::dirtab::FileListingEntry;
     use crate::write::fs::{
-        FileEntry, ImagePath, MemoryFilesystem, SectorLinearBlockDevice,
-        SectorLinearBlockFilesystem, SectorLinearBlockSectorContents,
+        FileEntry, FilesystemCopier, FilesystemHierarchy, ImagePath, MemoryFilesystem,
+        SectorLinearBlockDevice, SectorLinearBlockFilesystem, SectorLinearBlockSectorContents,
+        SectorLinearImage,
     };
     use crate::write::img::NoOpProgressVisitor;
 
     use super::fs::DirectoryTreeEntry;
     use super::{ProgressInfo, create_dirent_tables, create_xdvdfs_image};
     use crate::Error;
+
+    /// Lists every directory in reverse
+    struct Reversed<F>(F);
+
+    impl<F: FilesystemHierarchy> FilesystemHierarchy for Reversed<F> {
+        fn read_dir(&mut self, path: &ImagePath) -> crate::Result<Vec<FileEntry>> {
+            let mut entries = self.0.read_dir(path)?;
+            entries.reverse();
+            Ok(entries)
+        }
+    }
+
+    impl<F: FilesystemCopier<[u8]>> FilesystemCopier<[u8]> for Reversed<F> {
+        fn copy_file_in(
+            &mut self,
+            src: &ImagePath,
+            dest: &mut [u8],
+            input_offset: u64,
+            output_offset: u64,
+            size: u64,
+        ) -> crate::Result<u64> {
+            self.0
+                .copy_file_in(src, dest, input_offset, output_offset, size)
+        }
+    }
+
+    fn image_bytes(fs: impl FilesystemHierarchy + FilesystemCopier<[u8]>) -> Vec<u8> {
+        let mut slbd = SectorLinearBlockDevice::default();
+        let mut slbfs = SectorLinearBlockFilesystem::new(fs);
+        create_xdvdfs_image(&mut slbfs, &mut slbd, NoOpProgressVisitor)
+            .expect("Packing should succeed");
+
+        SectorLinearImage::new(&slbd, &mut slbfs)
+            .read_linear(0, slbd.size())
+            .expect("Image should read back")
+    }
 
     #[test]
     fn test_create_dirent_tables_empty_root() {
@@ -412,14 +444,43 @@ mod test {
                 ProgressInfo::FileCount(3),
                 ProgressInfo::DirCount(3),
                 ProgressInfo::DirAdded("/".into(), 33),
-                ProgressInfo::FileAdded("/a".into(), 34),
-                ProgressInfo::FileAdded("/b".into(), 35),
-                ProgressInfo::DirAdded("/a".into(), 34),
+                ProgressInfo::FileAdded("/b".into(), 34),
+                ProgressInfo::FileAdded("/a".into(), 35),
+                ProgressInfo::DirAdded("/a".into(), 35),
                 ProgressInfo::FileAdded("/a/b".into(), 36),
-                ProgressInfo::DirAdded("/b".into(), 35),
+                ProgressInfo::DirAdded("/b".into(), 34),
                 ProgressInfo::FinishedCopyingImageData,
                 ProgressInfo::FinishedPacking,
             ]
+        );
+    }
+
+    #[test]
+    fn test_image_independent_of_listing_order() {
+        let files = [
+            "/default.xbe",
+            "/Media/intro.bik",
+            "/media_2/A.bin",
+            "/Media/b.bin",
+            "/Audio/z.wav",
+            "/Audio/Y.wav",
+            "/audio_x.wav",
+            "/README.txt",
+            "/Media/C.bin",
+            "/Media/d.bin",
+        ];
+        let mut forward = MemoryFilesystem::default();
+        for path in files {
+            forward.create(path, path.as_bytes());
+        }
+        let mut backward = MemoryFilesystem::default();
+        for path in files.iter().rev() {
+            backward.create(*path, path.as_bytes());
+        }
+
+        assert!(
+            image_bytes(forward) == image_bytes(Reversed(backward)),
+            "images differ"
         );
     }
 
@@ -489,12 +550,12 @@ mod test {
             slbd.get(33),
             SectorLinearBlockSectorContents::RawData(_)
         ));
-        // "/a"
+        // "/b"
         assert!(matches!(
             slbd.get(34),
             SectorLinearBlockSectorContents::RawData(_)
         ));
-        // "/b"
+        // "/a"
         assert!(matches!(
             slbd.get(35),
             SectorLinearBlockSectorContents::RawData(_)
