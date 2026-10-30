@@ -1,9 +1,7 @@
 use core::ops::RangeBounds;
 use std::io;
 
-#[cfg(test)]
-use crate::write::fs::PathRef;
-use crate::{blockdev::BlockDeviceWrite, layout, write::fs::PathVec};
+use crate::{blockdev::BlockDeviceWrite, layout, write::fs::ImagePath};
 
 /// Contents for a region of the sector linear block device
 /// The sector offset is specified as the key in the contents tree,
@@ -14,7 +12,7 @@ pub enum SectorLinearBlockRegion {
     // Its length should be a multiple of sector size
     RawData(Box<[u8]>),
     // A file of `len` bytes, zero-padded to the end of its last sector
-    File { path: PathVec, len: u64 },
+    File { path: ImagePath, len: u64 },
 }
 
 /// Contents of a single sector within the sector linear block device
@@ -22,7 +20,7 @@ pub enum SectorLinearBlockRegion {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SectorLinearBlockSectorContents<'a> {
     RawData(&'a [u8]),
-    File(PathRef<'a>),
+    File(&'a ImagePath),
     Empty,
 }
 
@@ -56,7 +54,7 @@ impl SectorLinearBlockRegion {
                 let end = start + sector_size;
                 SectorLinearBlockSectorContents::RawData(&data[start..end])
             }
-            Self::File { path, .. } => SectorLinearBlockSectorContents::File(path.into()),
+            Self::File { path, .. } => SectorLinearBlockSectorContents::File(path),
         }
     }
 }
@@ -178,13 +176,13 @@ impl BlockDeviceWrite for SectorLinearBlockDevice {
 mod test {
     use core::ops::Bound;
 
-    use crate::write::fs::{PathVec, SectorLinearBlockRegion};
+    use crate::write::fs::{ImagePath, SectorLinearBlockRegion};
 
     use super::{SectorLinearBlockDevice, SectorLinearBlockSectorContents};
 
     fn file_region(sectors: u64) -> SectorLinearBlockRegion {
         SectorLinearBlockRegion::File {
-            path: PathVec::default(),
+            path: ImagePath::root(),
             len: sectors * crate::layout::SECTOR_SIZE_U64,
         }
     }
@@ -204,7 +202,7 @@ mod test {
         slbd.contents.insert(
             5,
             SectorLinearBlockRegion::File {
-                path: PathVec::default(),
+                path: ImagePath::root(),
                 len: 2 * 2048 + 1,
             },
         );
@@ -217,7 +215,7 @@ mod test {
         slbd.contents.insert(
             5,
             SectorLinearBlockRegion::File {
-                path: PathVec::default(),
+                path: ImagePath::root(),
                 len: 2048,
             },
         );
@@ -240,7 +238,7 @@ mod test {
         slbd.contents.insert(
             5,
             SectorLinearBlockRegion::File {
-                path: PathVec::default(),
+                path: ImagePath::root(),
                 len: 0,
             },
         );

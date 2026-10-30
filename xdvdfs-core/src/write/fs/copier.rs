@@ -1,6 +1,6 @@
 use core::ops::DerefMut;
 
-use super::PathRef;
+use super::ImagePath;
 use crate::blockdev::BlockDeviceWrite;
 
 /// A trait for copying data out of a filesystem.
@@ -13,7 +13,7 @@ pub trait FilesystemCopier<BDW: BlockDeviceWrite + ?Sized> {
     /// Copy the entire contents of file `src` into `dest` at the specified offset
     fn copy_file_in(
         &mut self,
-        src: PathRef<'_>,
+        src: &ImagePath,
         dest: &mut BDW,
         input_offset: u64,
         output_offset: u64,
@@ -29,7 +29,7 @@ where
 {
     fn copy_file_in(
         &mut self,
-        src: PathRef<'_>,
+        src: &ImagePath,
         dest: &mut BDW,
         input_offset: u64,
         output_offset: u64,
@@ -44,7 +44,7 @@ where
 mod test {
     use crate::{
         blockdev::BlockDeviceWrite,
-        write::fs::{FilesystemCopier, MemoryFilesystem, PathRef},
+        write::fs::{FilesystemCopier, ImagePath, MemoryFilesystem},
     };
 
     struct FSContainer<F>(F);
@@ -54,7 +54,7 @@ mod test {
     {
         fn copy_file_in(
             &mut self,
-            src: PathRef<'_>,
+            src: &ImagePath,
             dest: &mut BDW,
             input_offset: u64,
             output_offset: u64,
@@ -74,7 +74,7 @@ mod test {
         let mut fs = FSContainer(memfs);
 
         let mut buf = [0u8; 3];
-        let res = fs.copy_file_in("/a".into(), buf.as_mut_slice(), 0, 0, 3);
+        let res = fs.copy_file_in(&ImagePath::from("/a"), buf.as_mut_slice(), 0, 0, 3);
         assert_eq!(res.expect("Copy should succeed"), 3);
         assert_eq!(&buf, b"abc");
     }
@@ -88,7 +88,7 @@ mod test {
         let mut fs = FSContainer(&mut memfs);
 
         let mut buf = [0u8; 3];
-        let res = fs.copy_file_in("/a".into(), buf.as_mut_slice(), 0, 0, 3);
+        let res = fs.copy_file_in(&ImagePath::from("/a"), buf.as_mut_slice(), 0, 0, 3);
         assert_eq!(res.expect("Copy should succeed"), 3);
         assert_eq!(&buf, b"abc");
     }

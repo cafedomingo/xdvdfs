@@ -4,7 +4,7 @@ use std::{
     path::Path,
 };
 
-use xdvdfs::write::img::ProgressVisitor;
+use xdvdfs::write::{fs::ImagePath, img::ProgressVisitor};
 
 pub struct StdIoProgressReporter<'source> {
     stdio: StdoutLock<'static>,
@@ -36,7 +36,7 @@ impl<'source> ProgressVisitor for StdIoProgressReporter<'source> {
         self.file_count += dir_count;
     }
 
-    fn directory_added(&mut self, path: xdvdfs::write::fs::PathRef<'_>, sector: u64) {
+    fn directory_added(&mut self, path: &ImagePath, sector: u64) {
         self.progress_count += 1;
         let _ = writeln!(
             self.stdio,
@@ -45,7 +45,7 @@ impl<'source> ProgressVisitor for StdIoProgressReporter<'source> {
         );
     }
 
-    fn file_added(&mut self, path: xdvdfs::write::fs::PathRef<'_>, sector: u64) {
+    fn file_added(&mut self, path: &ImagePath, sector: u64) {
         self.progress_count += 1;
         let _ = writeln!(
             self.stdio,

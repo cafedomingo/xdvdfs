@@ -2,7 +2,7 @@ use crate::layout::{
     self, is_safe_name, DirectoryEntryData, DirectoryEntryDiskNode, DirentAttributes,
 };
 use crate::write::avl;
-use crate::write::fs::PathVec;
+use crate::write::fs::ImagePath;
 use crate::Error;
 
 use super::avl::AvlNode;
@@ -11,7 +11,7 @@ use super::sector::{required_sectors, SectorAllocator};
 #[derive(Default)]
 pub struct AvlDirectoryEntryTableBuilder<'alloc> {
     /// The directory this table lists, to name entries in errors
-    dir: PathVec,
+    dir: ImagePath,
     table: avl::AvlTree<DirectoryEntryData<'alloc>>,
 }
 
@@ -115,7 +115,7 @@ fn serialize_dirent_disk_node(
 }
 
 impl<'alloc> AvlDirectoryEntryTableBuilder<'alloc> {
-    pub fn new(dir: PathVec) -> Self {
+    pub fn new(dir: ImagePath) -> Self {
         Self {
             dir,
             table: avl::AvlTree::default(),
@@ -129,7 +129,7 @@ impl<'alloc> AvlDirectoryEntryTableBuilder<'alloc> {
         attributes: DirentAttributes,
         idx: usize,
     ) -> crate::Result<()> {
-        let path = || PathVec::from_base(self.dir.clone(), name);
+        let path = || self.dir.join(name);
         if !is_safe_name(name) {
             return Err(Error::InvalidFileName(path()));
         }
@@ -169,9 +169,8 @@ impl<'alloc> AvlDirectoryEntryTableWriter<'alloc> {
         let dir = &builder.dir;
         builder.table.fold_mut(Ok(0), |res, node| {
             res.and_then(|_| {
-                node.compute_len_and_name_encoding().ok_or_else(|| {
-                    Error::FileNameNotEncodable(PathVec::from_base(dir.clone(), node.get_name()))
-                })
+                node.compute_len_and_name_encoding()
+                    .ok_or_else(|| Error::FileNameNotEncodable(dir.join(node.get_name())))
             })
         })?;
 
@@ -307,7 +306,7 @@ mod test {
         layout::DirectoryEntryDiskNode,
         write::{
             dirtab::{DirtabWriterBuffers, FileListingEntry},
-            fs::PathVec,
+            fs::ImagePath,
             sector::SectorAllocator,
         },
         Error,
@@ -710,7 +709,7 @@ mod test {
         writer.add_file("t1", 10).unwrap();
         assert!(matches!(
             writer.add_dir("t1", 20, 1234),
-            Err(Error::DuplicateFileName(path)) if path == PathVec::from("t1")
+            Err(Error::DuplicateFileName(path)) if path == ImagePath::from("t1")
         ));
     }
 
@@ -720,19 +719,19 @@ mod test {
         let mut writer = AvlDirectoryEntryTableBuilder::default();
         assert!(matches!(
             writer.add_dir(&long_name, 20, 1234),
-            Err(Error::FileNameTooLong(path)) if path == PathVec::from(long_name.as_str())
+            Err(Error::FileNameTooLong(path)) if path == ImagePath::from(long_name.as_str())
         ));
     }
 
     #[test]
     fn test_dirtab_writer_reject_unsafe_name() {
-        let mut writer = AvlDirectoryEntryTableBuilder::new(PathVec::from("/dir"));
+        let mut writer = AvlDirectoryEntryTableBuilder::new(ImagePath::from("/dir"));
         for name in ["a:b", "a\\b"] {
             assert!(
                 matches!(
                     writer.add_file(name, 10),
                     Err(Error::InvalidFileName(path))
-                        if path == PathVec::from_base(PathVec::from("/dir"), name)
+                        if path == ImagePath::from("/dir").join(name)
                 ),
                 "{name:?}"
             );
@@ -741,11 +740,11 @@ mod test {
 
     #[test]
     fn test_dirtab_writer_unencodable_name_names_path() {
-        let mut writer = AvlDirectoryEntryTableBuilder::new(PathVec::from("/dir"));
+        let mut writer = AvlDirectoryEntryTableBuilder::new(ImagePath::from("/dir"));
         writer.add_file("日本.txt", 10).unwrap();
         assert!(matches!(
             writer.build(),
-            Err(Error::FileNameNotEncodable(path)) if path == PathVec::from("/dir/日本.txt")
+            Err(Error::FileNameNotEncodable(path)) if path == ImagePath::from("/dir/日本.txt")
         ));
     }
 }

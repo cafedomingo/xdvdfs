@@ -15,8 +15,9 @@ pub fn checksum<BDR: BlockDeviceRead + ?Sized>(
     let tree = volume.root_table.file_tree(dev)?;
     let mut iter: BTreeMap<String, DirectoryEntryNode> = BTreeMap::new();
 
+    // Sorted as strings, not as `ImagePath`s, since the order is part of the hash
     for (dir, file) in tree {
-        let path = format!("{}/{}", dir, file.name_str()?);
+        let path = dir.join(&file.name_str()?).to_string();
         iter.insert(path, file);
     }
 
@@ -97,6 +98,20 @@ mod test {
 
         let mut expected = Sha3_256::new();
         for part in [&b"/a"[..], b"/a/big", &big, b"/small", b"small"] {
+            expected.update(part);
+        }
+        assert_eq!(checksum_of(fs), <[u8; 32]>::from(expected.finalize()));
+    }
+
+    #[test]
+    fn test_checksum_sorts_paths_as_strings() {
+        let mut fs = MemoryFilesystem::default();
+        fs.create("/a/b", b"b");
+        fs.create("/a.txt", b"a");
+
+        // `.` sorts before `/`
+        let mut expected = Sha3_256::new();
+        for part in [&b"/a"[..], b"/a.txt", b"a", b"/a/b", b"b"] {
             expected.update(part);
         }
         assert_eq!(checksum_of(fs), <[u8; 32]>::from(expected.finalize()));

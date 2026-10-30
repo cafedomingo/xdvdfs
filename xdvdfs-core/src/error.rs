@@ -1,6 +1,6 @@
 use std::io;
 
-use crate::write::fs::PathVec;
+use crate::write::fs::ImagePath;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -33,31 +33,31 @@ pub enum Error {
     #[error("expected directory, found file")]
     IsNotDirectory,
     #[error("{0}: file runs past the end of the image")]
-    TruncatedFile(PathVec),
+    TruncatedFile(ImagePath),
     #[error("{0}: directory table runs past the end of the image")]
-    TruncatedDirectory(PathVec),
+    TruncatedDirectory(ImagePath),
     #[error("path \"{0}\" not found")]
-    NotFound(PathVec),
+    NotFound(ImagePath),
 
     #[error("serialization failed")]
     SerializationFailed,
     #[error("{0}: name matches another in its directory (Xbox names ignore case); rename it")]
-    DuplicateFileName(PathVec),
+    DuplicateFileName(ImagePath),
     #[error("too many entries in a single directory")]
     TooManyDirectoryEntries,
     #[error("{0}: file is too large for an Xbox image (must be under 4 GiB)")]
-    FileTooLarge(PathVec),
+    FileTooLarge(ImagePath),
     #[error("{0}: name is longer than an Xbox image allows (255 bytes); rename it")]
-    FileNameTooLong(PathVec),
+    FileNameTooLong(ImagePath),
     #[error("{0}: name can't be stored in an Xbox image (Windows-1252); rename it")]
-    FileNameNotEncodable(PathVec),
+    FileNameNotEncodable(ImagePath),
     #[error("{0}: name is empty, `.` or `..`, or contains `/`, `\\`, `:` or NUL; rename it")]
-    InvalidFileName(PathVec),
+    InvalidFileName(ImagePath),
 }
 
 impl Error {
     /// Names `dir` if this is a short read of its table
-    pub fn in_directory(self, dir: impl Into<PathVec>) -> Self {
+    pub fn in_directory(self, dir: impl Into<ImagePath>) -> Self {
         match self {
             Self::Io(err) if err.kind() == io::ErrorKind::UnexpectedEof => {
                 Self::TruncatedDirectory(dir.into())
@@ -67,7 +67,7 @@ impl Error {
     }
 
     /// Names `file` if this is a short read of its data
-    pub fn in_file(self, file: impl Into<PathVec>) -> Self {
+    pub fn in_file(self, file: impl Into<ImagePath>) -> Self {
         match self {
             Self::Io(err) if err.kind() == io::ErrorKind::UnexpectedEof => {
                 Self::TruncatedFile(file.into())
