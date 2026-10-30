@@ -79,31 +79,32 @@ pub async fn open_image(
 /// Returns the result of std::fs::canonicalize, if it returned without error,
 /// otherwise returns the result of std::path::absolute
 /// std::fs::canonicalize will follow symlinks, but seems to error on some filesystems
-/// on Windows. Following symlinks is desirable, so it is attempted first
+/// on Windows. Following symlinks is desirable, so it is attempted first.
+/// A path that doesn't exist yet, such as an output image, is resolved through
+/// its parent directory, since std::path::absolute keeps `..` components.
 pub fn absolute_path(path: &Path) -> std::io::Result<PathBuf> {
-    match std::fs::canonicalize(path) {
-        Err(_) => std::path::absolute(path),
-        ok => ok,
+    if let Ok(path) = std::fs::canonicalize(path) {
+        return Ok(path);
+    }
+
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    match (std::fs::canonicalize(parent), path.file_name()) {
+        (Ok(parent), Some(name)) => Ok(parent.join(name)),
+        _ => std::path::absolute(path),
     }
 }
 
 /// Similar to Path::with_extension, but will not overwrite the extension for
 /// directories
-// TODO: Replace with `Path::with_added_extension` after it stabilizes
 pub fn with_extension(path: &Path, ext: &str, is_dir: bool) -> PathBuf {
-    if !is_dir {
-        return path.with_extension(ext);
+    if is_dir {
+        path.with_added_extension(ext)
+    } else {
+        path.with_extension(ext)
     }
-
-    let original_ext = path.extension();
-    let Some(original_ext) = original_ext else {
-        return path.with_extension(ext);
-    };
-
-    let mut new_ext = original_ext.to_owned();
-    new_ext.push(".");
-    new_ext.push(ext);
-    path.with_extension(new_ext)
 }
 
 #[cfg(test)]

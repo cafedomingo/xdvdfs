@@ -33,6 +33,8 @@ pub enum XDVDFSFilesystemError<ReadErr, WriteErr> {
     BlockDevReadErr(#[source] ReadErr),
     #[error("failed to write to block device")]
     BlockDevWriteErr(#[source] WriteErr),
+    #[error("{0}: file runs past the end of the image")]
+    TruncatedFile(PathVec),
 }
 
 /// A Filesystem backed by an XDVDFS block device
@@ -187,7 +189,8 @@ where
             .offset(input_offset)
             .map_err(DirectoryTableLookupError::SizeOutOfBounds)
             .map_err(XDVDFSFilesystemError::FilesystemReadErr)?;
-        self.copier
+        let copied = self
+            .copier
             .copy(
                 input_offset,
                 output_offset,
@@ -195,7 +198,12 @@ where
                 &mut self.dev,
                 dest,
             )
-            .await
+            .await?;
+        if copied < size_to_copy {
+            return Err(XDVDFSFilesystemError::TruncatedFile(src.into()));
+        }
+
+        Ok(copied)
     }
 }
 

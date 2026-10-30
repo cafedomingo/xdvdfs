@@ -8,7 +8,12 @@ use std::process::{Command, Output};
 use tempfile::NamedTempFile;
 
 pub fn xdvdfs(args: &[&OsStr]) -> Output {
+    xdvdfs_in(Path::new("."), args)
+}
+
+pub fn xdvdfs_in(dir: &Path, args: &[&OsStr]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_xdvdfs"))
+        .current_dir(dir)
         .args(args)
         .output()
         .expect("failed to run xdvdfs")
