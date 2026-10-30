@@ -10,8 +10,6 @@ use crate::blockdev::BlockDeviceWrite;
 /// Multiple implementations of this trait allow the filesystem to be
 /// used to create images on various output types.
 pub trait FilesystemCopier<BDW: BlockDeviceWrite + ?Sized> {
-    type Error: core::error::Error + Send + Sync + 'static;
-
     /// Copy the entire contents of file `src` into `dest` at the specified offset
     fn copy_file_in(
         &mut self,
@@ -20,7 +18,7 @@ pub trait FilesystemCopier<BDW: BlockDeviceWrite + ?Sized> {
         input_offset: u64,
         output_offset: u64,
         size: u64,
-    ) -> Result<u64, Self::Error>;
+    ) -> crate::Result<u64>;
 }
 
 impl<BDW, F, FDeref> FilesystemCopier<BDW> for FDeref
@@ -29,8 +27,6 @@ where
     F: FilesystemCopier<BDW> + ?Sized,
     FDeref: DerefMut<Target = F>,
 {
-    type Error = F::Error;
-
     fn copy_file_in(
         &mut self,
         src: PathRef<'_>,
@@ -38,7 +34,7 @@ where
         input_offset: u64,
         output_offset: u64,
         size: u64,
-    ) -> Result<u64, Self::Error> {
+    ) -> crate::Result<u64> {
         self.deref_mut()
             .copy_file_in(src, dest, input_offset, output_offset, size)
     }
@@ -47,15 +43,15 @@ where
 #[cfg(test)]
 mod test {
     use crate::{
-        blockdev::{BlockDeviceWrite, NullBlockDevice},
+        blockdev::BlockDeviceWrite,
         write::fs::{FilesystemCopier, MemoryFilesystem, PathRef},
     };
 
     struct FSContainer<F>(F);
 
-    impl<BDW: BlockDeviceWrite, F: FilesystemCopier<BDW>> FilesystemCopier<BDW> for FSContainer<F> {
-        type Error = F::Error;
-
+    impl<BDW: BlockDeviceWrite + ?Sized, F: FilesystemCopier<BDW>> FilesystemCopier<BDW>
+        for FSContainer<F>
+    {
         fn copy_file_in(
             &mut self,
             src: PathRef<'_>,
@@ -63,7 +59,7 @@ mod test {
             input_offset: u64,
             output_offset: u64,
             size: u64,
-        ) -> Result<u64, Self::Error> {
+        ) -> crate::Result<u64> {
             self.0
                 .copy_file_in(src, dest, input_offset, output_offset, size)
         }
@@ -72,28 +68,28 @@ mod test {
     #[test]
     fn test_fs_copier_boxed_impl() {
         let mut memfs = MemoryFilesystem::default();
-        memfs.touch("/a");
+        memfs.create("/a", b"abc");
 
         let memfs = Box::new(memfs);
         let mut fs = FSContainer(memfs);
 
-        let mut nullbd = NullBlockDevice::default();
-
-        let res = fs.copy_file_in("/a".into(), &mut nullbd, 0, 0, 123);
-        assert_eq!(res, Ok(123));
+        let mut buf = [0u8; 3];
+        let res = fs.copy_file_in("/a".into(), buf.as_mut_slice(), 0, 0, 3);
+        assert_eq!(res.expect("Copy should succeed"), 3);
+        assert_eq!(&buf, b"abc");
     }
 
     #[test]
     fn test_fs_copier_ref_impl() {
         let mut memfs = MemoryFilesystem::default();
-        memfs.touch("/a");
+        memfs.create("/a", b"abc");
 
         let mut memfs = Box::new(memfs);
         let mut fs = FSContainer(&mut memfs);
 
-        let mut nullbd = NullBlockDevice::default();
-
-        let res = fs.copy_file_in("/a".into(), &mut nullbd, 0, 0, 123);
-        assert_eq!(res, Ok(123));
+        let mut buf = [0u8; 3];
+        let res = fs.copy_file_in("/a".into(), buf.as_mut_slice(), 0, 0, 3);
+        assert_eq!(res.expect("Copy should succeed"), 3);
+        assert_eq!(&buf, b"abc");
     }
 }

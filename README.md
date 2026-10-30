@@ -37,6 +37,8 @@ Commands:
 
 Running a subcommand with the `-h` flag will show help information for that specific subcommand.
 
+If an image is cut short, commands that read it name the file or directory that runs past its end. A read error from a damaged dump is reported as itself, not as "not an xdvdfs volume".
+
 #### Packing an Image
 
 To pack an image from a directory, run:
@@ -108,7 +110,7 @@ fn read_from_path(xiso: &Path, file_path: &str) -> Vec<u8> {
 }
 ```
 
-Custom block devices can be defined by implementing the traits in `xdvdfs::blockdev`.
+Custom block devices can be defined by implementing the traits in `xdvdfs::blockdev`, which report failures as `std::io::Error`. Library functions return `xdvdfs::Result`.
 
 The source code for xdvdfs-cli provides a more detailed example of how to use xdvdfs-core.
 

@@ -35,10 +35,13 @@ pub fn cmd_ls(args: &LsArgs) -> anyhow::Result<()> {
             .ok_or(anyhow::anyhow!("Not a directory"))?
     };
 
+    let in_dir = |err: xdvdfs::Error| err.in_directory(args.path.as_str());
     if args.scan {
-        let mut iter = dirent_table.scan_dirent_tree(img.as_mut())?;
+        let mut iter = dirent_table
+            .scan_dirent_tree(img.as_mut())
+            .map_err(in_dir)?;
 
-        while let Some(dirent) = iter.next_entry()? {
+        while let Some(dirent) = iter.next_entry().map_err(in_dir)? {
             let name = dirent.name_str()?;
             println!("{name}");
         }
@@ -46,7 +49,9 @@ pub fn cmd_ls(args: &LsArgs) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let listing = dirent_table.walk_dirent_tree(img.as_mut())?;
+    let listing = dirent_table
+        .walk_dirent_tree(img.as_mut())
+        .map_err(in_dir)?;
 
     for dirent in listing {
         let name = dirent.name_str()?;

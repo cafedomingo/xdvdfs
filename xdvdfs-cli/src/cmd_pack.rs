@@ -138,8 +138,7 @@ fn write_image(source_path: &Path, image_path: &Path) -> Result<(), anyhow::Erro
         create_xdvdfs_image(&mut fs, &mut image, progress_visitor)?;
     } else if meta.is_file() {
         let source = crate::img::open_image_raw(source_path)?;
-        let mut fs = XDVDFSFilesystem::<_, _, StdIOCopier<_, _>>::new(source)
-            .ok_or(anyhow::anyhow!("Failed to create XDVDFS filesystem"))?;
+        let mut fs = XDVDFSFilesystem::<_, _, StdIOCopier<_, _>>::new(source)?;
         create_xdvdfs_image(&mut fs, &mut image, progress_visitor)?;
     } else {
         bail!("Source must be a directory or an image file");

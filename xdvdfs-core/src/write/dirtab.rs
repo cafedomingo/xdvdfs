@@ -1,12 +1,12 @@
 use crate::layout::{
-    self, DirectoryEntryData, DirectoryEntryDiskNode, DirentAttributes, NameEncodingError,
+    self, is_safe_name, DirectoryEntryData, DirectoryEntryDiskNode, DirentAttributes,
 };
 use crate::write::avl;
 use crate::write::fs::PathVec;
+use crate::Error;
 
 use super::avl::AvlNode;
 use super::sector::{required_sectors, SectorAllocator};
-use super::FileStructureError;
 
 #[derive(Default)]
 pub struct AvlDirectoryEntryTableBuilder<'alloc> {
@@ -69,16 +69,12 @@ fn compute_offsets<T>(iter: impl Iterator<Item = (T, u32)>) -> impl Iterator<Ite
     })
 }
 
-fn name_error(dir: &PathVec, name: &str, err: NameEncodingError) -> FileStructureError {
-    FileStructureError::FileNameError(PathVec::from_base(dir.clone(), name), err)
-}
-
-fn avl_index_to_offset(index: Option<usize>, offsets: &[u32]) -> Result<u16, FileStructureError> {
+fn avl_index_to_offset(index: Option<usize>, offsets: &[u32]) -> crate::Result<u16> {
     index
         .map(|idx| offsets[idx] / 4)
         .unwrap_or_default()
         .try_into()
-        .map_err(|_| FileStructureError::TooManyDirectoryEntries)
+        .map_err(|_| Error::TooManyDirectoryEntries)
 }
 
 fn dirent_data_to_disk_node(
@@ -88,7 +84,7 @@ fn dirent_data_to_disk_node(
     offsets: &[u32],
     name_bytes: &[u8],
     sector: u32,
-) -> Result<DirectoryEntryDiskNode, FileStructureError> {
+) -> crate::Result<DirectoryEntryDiskNode> {
     let mut dirent = data.node;
     dirent.filename_length = name_bytes.len() as u8;
 
@@ -107,10 +103,10 @@ fn serialize_dirent_disk_node(
     table: &mut [u8],
     dirent: DirectoryEntryDiskNode,
     name_bytes: &[u8],
-) -> Result<(), FileStructureError> {
+) -> crate::Result<()> {
     dirent
         .serialize_into(table)
-        .map_err(|_| FileStructureError::SerializationError)?;
+        .map_err(|_| Error::SerializationFailed)?;
 
     let name_len = dirent.dirent.filename_length as usize;
     table[0xe..(0xe + name_len)].copy_from_slice(&name_bytes[0..name_len]);
@@ -132,29 +128,28 @@ impl<'alloc> AvlDirectoryEntryTableBuilder<'alloc> {
         size: u32,
         attributes: DirentAttributes,
         idx: usize,
-    ) -> Result<(), FileStructureError> {
-        let dirent = DirectoryEntryData::new_without_sector(name, size, attributes, idx)
-            .map_err(|err| name_error(&self.dir, name, err))?;
+    ) -> crate::Result<()> {
+        let path = || PathVec::from_base(self.dir.clone(), name);
+        if !is_safe_name(name) {
+            return Err(Error::InvalidFileName(path()));
+        }
 
+        let dirent = DirectoryEntryData::new_without_sector(name, size, attributes, idx)
+            .ok_or_else(|| Error::FileNameTooLong(path()))?;
         self.table
             .insert(dirent)
             .then_some(())
-            .ok_or(FileStructureError::DuplicateFileName)
+            .ok_or_else(|| Error::DuplicateFileName(path()))
     }
 
-    pub fn add_dir(
-        &mut self,
-        name: &'alloc str,
-        size: u32,
-        idx: usize,
-    ) -> Result<(), FileStructureError> {
+    pub fn add_dir(&mut self, name: &'alloc str, size: u32, idx: usize) -> crate::Result<()> {
         let attributes = DirentAttributes(0).with_directory(true);
 
         let size = size + ((2048 - size % 2048) % 2048);
         self.add_node(name, size, attributes, idx)
     }
 
-    pub fn add_file(&mut self, name: &'alloc str, size: u32) -> Result<(), FileStructureError> {
+    pub fn add_file(&mut self, name: &'alloc str, size: u32) -> crate::Result<()> {
         let attributes = DirentAttributes(0).with_archive(true);
         self.add_node(name, size, attributes, 0)
     }
@@ -163,19 +158,20 @@ impl<'alloc> AvlDirectoryEntryTableBuilder<'alloc> {
         self.table.reserve(size);
     }
 
-    pub fn build(self) -> Result<AvlDirectoryEntryTableWriter<'alloc>, FileStructureError> {
+    pub fn build(self) -> crate::Result<AvlDirectoryEntryTableWriter<'alloc>> {
         AvlDirectoryEntryTableWriter::new(self)
     }
 }
 
 impl<'alloc> AvlDirectoryEntryTableWriter<'alloc> {
-    fn new(mut builder: AvlDirectoryEntryTableBuilder<'alloc>) -> Result<Self, FileStructureError> {
+    fn new(mut builder: AvlDirectoryEntryTableBuilder<'alloc>) -> crate::Result<Self> {
         // Precompute the name encodings, bailing if any name is erroneous.
         let dir = &builder.dir;
         builder.table.fold_mut(Ok(0), |res, node| {
             res.and_then(|_| {
-                node.compute_len_and_name_encoding()
-                    .map_err(|err| name_error(dir, node.get_name(), err))
+                node.compute_len_and_name_encoding().ok_or_else(|| {
+                    Error::FileNameNotEncodable(PathVec::from_base(dir.clone(), node.get_name()))
+                })
             })
         })?;
 
@@ -250,7 +246,7 @@ impl<'alloc> AvlDirectoryEntryTableWriter<'alloc> {
         node: &AvlNode<DirectoryEntryData<'_>>,
         avl_idx_to_dirtab_offset: &[u32],
         sector: u32,
-    ) -> Result<(), FileStructureError> {
+    ) -> crate::Result<()> {
         let name_bytes = node.data().get_encoded_name();
         let dirent = dirent_data_to_disk_node(
             node.data(),
@@ -276,7 +272,7 @@ impl<'alloc> AvlDirectoryEntryTableWriter<'alloc> {
         &mut self,
         allocator: &mut SectorAllocator,
         buffers: &mut DirtabWriterBuffers,
-    ) -> Result<(), FileStructureError> {
+    ) -> crate::Result<()> {
         let DirtabWriterBuffers {
             dirtab_bytes,
             avl_idx_to_dirtab_offset,
@@ -308,13 +304,13 @@ impl<'alloc> AvlDirectoryEntryTableWriter<'alloc> {
 #[cfg(test)]
 mod test {
     use crate::{
-        layout::{DirectoryEntryDiskNode, NameEncodingError},
+        layout::DirectoryEntryDiskNode,
         write::{
             dirtab::{DirtabWriterBuffers, FileListingEntry},
             fs::PathVec,
             sector::SectorAllocator,
-            FileStructureError,
         },
+        Error,
     };
 
     use super::{
@@ -368,24 +364,24 @@ mod test {
     #[test]
     fn test_avl_index_to_offset_leaf() {
         let offsets = &[0, 100, 200];
-        assert_eq!(avl_index_to_offset(None, offsets), Ok(0));
+        let offset = avl_index_to_offset(None, offsets).expect("Offset should fit");
+        assert_eq!(offset, 0);
     }
 
     #[test]
     fn test_avl_index_to_offset_node() {
         let offsets = &[0, 100, 200];
-        assert_eq!(avl_index_to_offset(Some(1), offsets), Ok(25));
+        let offset = avl_index_to_offset(Some(1), offsets).expect("Offset should fit");
+        assert_eq!(offset, 25);
     }
 
     #[test]
     fn test_avl_index_to_offset_out_of_range() {
-        use crate::write::FileStructureError;
-
         let offsets = &[0, 100, 262144];
-        assert_eq!(
+        assert!(matches!(
             avl_index_to_offset(Some(2), offsets),
-            Err(FileStructureError::TooManyDirectoryEntries)
-        );
+            Err(Error::TooManyDirectoryEntries)
+        ));
     }
 
     #[test]
@@ -500,7 +496,7 @@ mod test {
     #[test]
     fn test_dirtab_writer_single_directory_size_computation() {
         let mut writer = AvlDirectoryEntryTableBuilder::default();
-        assert_eq!(writer.add_dir("test", 30, 1234), Ok(()));
+        writer.add_dir("test", 30, 1234).unwrap();
 
         let writer = writer.build().expect("Directory should be valid");
         assert_eq!(writer.dirtab_size(), 0xe + 4 + 2);
@@ -509,7 +505,7 @@ mod test {
     #[test]
     fn test_dirtab_writer_single_file_size_computation() {
         let mut writer = AvlDirectoryEntryTableBuilder::default();
-        assert_eq!(writer.add_file("test", 30), Ok(()));
+        writer.add_file("test", 30).unwrap();
 
         let writer = writer.build().expect("Directory should be valid");
         assert_eq!(writer.dirtab_size(), 0xe + 4 + 2);
@@ -518,8 +514,8 @@ mod test {
     #[test]
     fn test_dirtab_writer_multiple_entry_size_computation_without_realignment() {
         let mut writer = AvlDirectoryEntryTableBuilder::default();
-        assert_eq!(writer.add_file("file", 30), Ok(()));
-        assert_eq!(writer.add_dir("dir", 30, 1234), Ok(()));
+        writer.add_file("file", 30).unwrap();
+        writer.add_dir("dir", 30, 1234).unwrap();
 
         let writer = writer.build().expect("Directory should be valid");
 
@@ -537,7 +533,7 @@ mod test {
         // Each dirent is of length 20, with a total over 2048
         let names: Vec<String> = (0..103).into_iter().map(|i| format!("{i:06}")).collect();
         for name in &names {
-            assert_eq!(writer.add_file(name, 10), Ok(()));
+            writer.add_file(name, 10).unwrap();
         }
 
         let writer = writer.build().expect("Directory should be valid");
@@ -566,7 +562,7 @@ mod test {
     #[test]
     fn test_dirtab_writer_serialize_single_file() {
         let mut writer = AvlDirectoryEntryTableBuilder::default();
-        assert_eq!(writer.add_file("test", 10), Ok(()));
+        writer.add_file("test", 10).unwrap();
 
         let mut writer = writer.build().expect("Directory should be valid");
         let mut allocator = SectorAllocator::default();
@@ -598,7 +594,7 @@ mod test {
     #[test]
     fn test_dirtab_writer_serialize_single_dir() {
         let mut writer = AvlDirectoryEntryTableBuilder::default();
-        assert_eq!(writer.add_dir("test", 20, 1234), Ok(()));
+        writer.add_dir("test", 20, 1234).unwrap();
 
         let mut writer = writer.build().expect("Directory should be valid");
         let mut allocator = SectorAllocator::default();
@@ -632,9 +628,9 @@ mod test {
     #[test]
     fn test_dirtab_writer_serialize_tree_entries() {
         let mut writer = AvlDirectoryEntryTableBuilder::default();
-        assert_eq!(writer.add_dir("t1", 20, 1), Ok(()));
-        assert_eq!(writer.add_dir("t2", 20, 2), Ok(()));
-        assert_eq!(writer.add_dir("t3", 20, 3), Ok(()));
+        writer.add_dir("t1", 20, 1).unwrap();
+        writer.add_dir("t2", 20, 2).unwrap();
+        writer.add_dir("t3", 20, 3).unwrap();
 
         let mut writer = writer.build().expect("Directory should be valid");
         let mut allocator = SectorAllocator::default();
@@ -691,7 +687,7 @@ mod test {
         // Each dirent is of length 20, with a total over 2048
         let names: Vec<String> = (0..103).into_iter().map(|i| format!("{i:06}")).collect();
         for name in &names {
-            assert_eq!(writer.add_file(name, 10), Ok(()));
+            writer.add_file(name, 10).unwrap();
         }
 
         let mut writer = writer.build().expect("Directory should be valid");
@@ -711,36 +707,33 @@ mod test {
     #[test]
     fn test_dirtab_writer_reject_duplicate_names() {
         let mut writer = AvlDirectoryEntryTableBuilder::default();
-        assert_eq!(writer.add_file("t1", 10), Ok(()));
-        assert_eq!(
+        writer.add_file("t1", 10).unwrap();
+        assert!(matches!(
             writer.add_dir("t1", 20, 1234),
-            Err(FileStructureError::DuplicateFileName)
-        );
+            Err(Error::DuplicateFileName(path)) if path == PathVec::from("t1")
+        ));
     }
 
     #[test]
     fn test_dirtab_writer_reject_long_name() {
         let long_name: String = core::iter::repeat_n('a', 260).collect();
         let mut writer = AvlDirectoryEntryTableBuilder::default();
-        assert_eq!(
+        assert!(matches!(
             writer.add_dir(&long_name, 20, 1234),
-            Err(FileStructureError::FileNameError(
-                PathVec::from(long_name.as_str()),
-                NameEncodingError::NameTooLong
-            ))
-        );
+            Err(Error::FileNameTooLong(path)) if path == PathVec::from(long_name.as_str())
+        ));
     }
 
     #[test]
     fn test_dirtab_writer_reject_unsafe_name() {
         let mut writer = AvlDirectoryEntryTableBuilder::new(PathVec::from("/dir"));
         for name in ["a:b", "a\\b"] {
-            assert_eq!(
-                writer.add_file(name, 10),
-                Err(FileStructureError::FileNameError(
-                    PathVec::from_base(PathVec::from("/dir"), name),
-                    NameEncodingError::UnsafeName
-                )),
+            assert!(
+                matches!(
+                    writer.add_file(name, 10),
+                    Err(Error::InvalidFileName(path))
+                        if path == PathVec::from_base(PathVec::from("/dir"), name)
+                ),
                 "{name:?}"
             );
         }
@@ -749,11 +742,10 @@ mod test {
     #[test]
     fn test_dirtab_writer_unencodable_name_names_path() {
         let mut writer = AvlDirectoryEntryTableBuilder::new(PathVec::from("/dir"));
-        assert_eq!(writer.add_file("日本.txt", 10), Ok(()));
+        writer.add_file("日本.txt", 10).unwrap();
         assert!(matches!(
             writer.build(),
-            Err(FileStructureError::FileNameError(path, NameEncodingError::StringEncodingError))
-                if path == PathVec::from("/dir/日本.txt")
+            Err(Error::FileNameNotEncodable(path)) if path == PathVec::from("/dir/日本.txt")
         ));
     }
 }

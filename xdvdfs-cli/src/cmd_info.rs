@@ -67,11 +67,14 @@ fn print_dirent(dirent: &DirectoryEntryNode) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn print_subdir<BDR: BlockDeviceRead<ReadError = std::io::Error> + ?Sized>(
+fn print_subdir<BDR: BlockDeviceRead + ?Sized>(
+    path: &str,
     subdir: &DirectoryEntryTable,
     img: &mut BDR,
 ) -> anyhow::Result<()> {
-    let children = subdir.walk_dirent_tree(img)?;
+    let children = subdir
+        .walk_dirent_tree(img)
+        .map_err(|err| err.in_directory(path))?;
     for node in children {
         let name = node.name_str()?;
         println!("{name}");
@@ -90,7 +93,7 @@ pub fn cmd_info(args: &InfoArgs) -> anyhow::Result<()> {
         let volume = xdvdfs::read::read_volume(image.as_mut())?;
 
         if path == "/" {
-            print_subdir(&volume.root_table, image.as_mut())?;
+            print_subdir(path, &volume.root_table, image.as_mut())?;
             return Ok(());
         }
 
@@ -99,7 +102,7 @@ pub fn cmd_info(args: &InfoArgs) -> anyhow::Result<()> {
 
         if let Some(subdir) = dirent.node.dirent.dirent_table() {
             println!();
-            print_subdir(&subdir, image.as_mut())?;
+            print_subdir(path, &subdir, image.as_mut())?;
         }
 
         return Ok(());
