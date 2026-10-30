@@ -1,4 +1,4 @@
-use crate::layout::{DirentName, NameEncodingError};
+use crate::layout::{is_safe_name, DirentName, NameEncodingError};
 
 use super::{DirectoryEntryDiskData, DirentAttributes, DiskRegion};
 
@@ -24,6 +24,10 @@ impl<'alloc> DirectoryEntryData<'alloc> {
         attributes: DirentAttributes,
         idx: usize,
     ) -> Result<Self, NameEncodingError> {
+        if !is_safe_name(name) {
+            return Err(NameEncodingError::UnsafeName);
+        }
+
         if name.len() > 255 {
             return Err(NameEncodingError::NameTooLong);
         }
@@ -49,10 +53,8 @@ impl<'alloc> DirectoryEntryData<'alloc> {
         self.name.get_name()
     }
 
-    pub fn compute_len_and_name_encoding(
-        &mut self,
-    ) -> Result<u8, crate::write::FileStructureError> {
-        Ok(self.name.set_encode_name()?)
+    pub fn compute_len_and_name_encoding(&mut self) -> Result<u8, NameEncodingError> {
+        self.name.set_encode_name()
     }
 
     pub fn get_encoded_name(&self) -> &[u8] {

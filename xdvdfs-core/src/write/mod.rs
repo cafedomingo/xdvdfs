@@ -1,4 +1,4 @@
-use fs::{FilesystemCopier, FilesystemHierarchy};
+use fs::{FilesystemCopier, FilesystemHierarchy, PathVec};
 
 use crate::blockdev::BlockDeviceWrite;
 use crate::layout::NameEncodingError;
@@ -20,14 +20,14 @@ mod progress_info;
 pub enum FileStructureError {
     #[error("serialization failed")]
     SerializationError,
-    #[error(transparent)]
-    FileNameError(#[from] NameEncodingError),
+    #[error("{0}: {1}")]
+    FileNameError(PathVec, NameEncodingError),
     #[error("file name already exists")]
     DuplicateFileName,
     #[error("too many entries in a single directory")]
     TooManyDirectoryEntries,
-    #[error("file is too large")]
-    FileTooLarge,
+    #[error("{0}: file is too large for an Xbox image (must be under 4 GiB)")]
+    FileTooLarge(PathVec),
 }
 
 /// Error states that can result during image creation.

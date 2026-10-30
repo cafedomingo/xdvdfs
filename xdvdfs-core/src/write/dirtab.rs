@@ -1,5 +1,8 @@
-use crate::layout::{self, DirectoryEntryData, DirectoryEntryDiskNode, DirentAttributes};
+use crate::layout::{
+    self, DirectoryEntryData, DirectoryEntryDiskNode, DirentAttributes, NameEncodingError,
+};
 use crate::write::avl;
+use crate::write::fs::PathVec;
 
 use alloc::vec::Vec;
 
@@ -9,6 +12,8 @@ use super::FileStructureError;
 
 #[derive(Default)]
 pub struct AvlDirectoryEntryTableBuilder<'alloc> {
+    /// The directory this table lists, to name entries in errors
+    dir: PathVec,
     table: avl::AvlTree<DirectoryEntryData<'alloc>>,
 }
 
@@ -66,6 +71,10 @@ fn compute_offsets<T>(iter: impl Iterator<Item = (T, u32)>) -> impl Iterator<Ite
     })
 }
 
+fn name_error(dir: &PathVec, name: &str, err: NameEncodingError) -> FileStructureError {
+    FileStructureError::FileNameError(PathVec::from_base(dir.clone(), name), err)
+}
+
 fn avl_index_to_offset(index: Option<usize>, offsets: &[u32]) -> Result<u16, FileStructureError> {
     index
         .map(|idx| offsets[idx] / 4)
@@ -112,6 +121,13 @@ fn serialize_dirent_disk_node(
 }
 
 impl<'alloc> AvlDirectoryEntryTableBuilder<'alloc> {
+    pub fn new(dir: PathVec) -> Self {
+        Self {
+            dir,
+            table: avl::AvlTree::default(),
+        }
+    }
+
     fn add_node(
         &mut self,
         name: &'alloc str,
@@ -119,7 +135,8 @@ impl<'alloc> AvlDirectoryEntryTableBuilder<'alloc> {
         attributes: DirentAttributes,
         idx: usize,
     ) -> Result<(), FileStructureError> {
-        let dirent = DirectoryEntryData::new_without_sector(name, size, attributes, idx)?;
+        let dirent = DirectoryEntryData::new_without_sector(name, size, attributes, idx)
+            .map_err(|err| name_error(&self.dir, name, err))?;
 
         self.table
             .insert(dirent)
@@ -156,8 +173,12 @@ impl<'alloc> AvlDirectoryEntryTableBuilder<'alloc> {
 impl<'alloc> AvlDirectoryEntryTableWriter<'alloc> {
     fn new(mut builder: AvlDirectoryEntryTableBuilder<'alloc>) -> Result<Self, FileStructureError> {
         // Precompute the name encodings, bailing if any name is erroneous.
+        let dir = &builder.dir;
         builder.table.fold_mut(Ok(0), |res, node| {
-            res.and_then(|_| node.compute_len_and_name_encoding())
+            res.and_then(|_| {
+                node.compute_len_and_name_encoding()
+                    .map_err(|err| name_error(dir, node.get_name(), err))
+            })
         })?;
 
         // Once the encodings are computed, we can determine the size of the
@@ -295,6 +316,7 @@ mod test {
         layout::{DirectoryEntryDiskNode, NameEncodingError},
         write::{
             dirtab::{DirtabWriterBuffers, FileListingEntry},
+            fs::PathVec,
             sector::SectorAllocator,
             FileStructureError,
         },
@@ -714,8 +736,35 @@ mod test {
         assert_eq!(
             writer.add_dir(&long_name, 20, 1234),
             Err(FileStructureError::FileNameError(
+                PathVec::from(long_name.as_str()),
                 NameEncodingError::NameTooLong
             ))
         );
+    }
+
+    #[test]
+    fn test_dirtab_writer_reject_unsafe_name() {
+        let mut writer = AvlDirectoryEntryTableBuilder::new(PathVec::from("/dir"));
+        for name in ["a:b", "a\\b"] {
+            assert_eq!(
+                writer.add_file(name, 10),
+                Err(FileStructureError::FileNameError(
+                    PathVec::from_base(PathVec::from("/dir"), name),
+                    NameEncodingError::UnsafeName
+                )),
+                "{name:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_dirtab_writer_unencodable_name_names_path() {
+        let mut writer = AvlDirectoryEntryTableBuilder::new(PathVec::from("/dir"));
+        assert_eq!(writer.add_file("日本.txt", 10), Ok(()));
+        assert!(matches!(
+            writer.build(),
+            Err(FileStructureError::FileNameError(path, NameEncodingError::StringEncodingError))
+                if path == PathVec::from("/dir/日本.txt")
+        ));
     }
 }

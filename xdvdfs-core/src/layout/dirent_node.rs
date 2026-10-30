@@ -3,7 +3,7 @@ use alloc::string::String;
 use encoding_rs::WINDOWS_1252;
 use thiserror::Error;
 
-use super::DirectoryEntryDiskNode;
+use super::{is_safe_name, DirectoryEntryDiskNode};
 
 /// In-memory structure to contain an on-disk tree node and
 /// file name information.
@@ -56,8 +56,7 @@ impl DirectoryEntryNode {
             .decode_without_bom_handling_and_without_replacement(self.name_slice())
             .ok_or(NameDeserializationError::InvalidEncoding)?;
 
-        // `:` because on Windows `Path::join("C:x")` discards the base path
-        if matches!(&*name, "" | "." | "..") || name.contains(['/', '\\', ':', '\0']) {
+        if !is_safe_name(&name) {
             return Err(NameDeserializationError::UnsafeName(name.into_owned()));
         }
 

@@ -32,10 +32,18 @@ pub fn cmp_ignore_case_utf8(a: &str, b: &str) -> core::cmp::Ordering {
 
 #[derive(Error, Copy, Clone, Debug, Eq, PartialEq)]
 pub enum NameEncodingError {
-    #[error("file name is too long")]
+    #[error("name is longer than an Xbox image allows (255 bytes); rename it")]
     NameTooLong,
-    #[error("cannot encode string into utf-8")]
+    #[error("name can't be stored in an Xbox image (Windows-1252); rename it")]
     StringEncodingError,
+    #[error("name is empty, `.` or `..`, or contains `/`, `\\`, `:` or NUL; rename it")]
+    UnsafeName,
+}
+
+/// Whether `name` is safe to use as a single path component on any host.
+pub fn is_safe_name(name: &str) -> bool {
+    // `:` because on Windows `Path::join("C:x")` discards the base path
+    !matches!(name, "" | "." | "..") && !name.contains(['/', '\\', ':', '\0'])
 }
 
 // When building a directory entry table, comparisons between entries

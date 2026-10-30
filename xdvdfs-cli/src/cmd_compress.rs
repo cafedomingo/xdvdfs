@@ -3,6 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use anyhow::bail;
 use clap::Args;
 use maybe_async::maybe_async;
 
@@ -11,7 +12,8 @@ use xdvdfs::{
     write::{self, img::ProgressInfo},
 };
 
-use crate::img::{absolute_path, open_image_raw, with_extension};
+use crate::cmd_pack::{check_image_path, default_image_path};
+use crate::img::{absolute_path, open_image_raw};
 
 #[derive(Args)]
 #[command(about = "Pack and compress an image from a given directory or source ISO image")]
@@ -45,36 +47,17 @@ impl ciso::split::SplitFilesystem<std::io::Error, BufFile> for SplitStdFs {
     async fn close(&mut self, _: BufFile) {}
 }
 
-fn get_default_image_path(source_path: &Path, is_dir: bool) -> Option<PathBuf> {
-    let source_file_name = source_path.file_name()?;
-    let output = with_extension(Path::new(source_file_name), "cso", is_dir);
-
-    Some(output)
-}
-
 #[maybe_async]
 pub async fn cmd_compress(args: &CompressArgs) -> Result<(), anyhow::Error> {
-    let source_path = PathBuf::from(&args.source_path);
+    let source_path = absolute_path(Path::new(&args.source_path))?;
     let meta = std::fs::metadata(&source_path)?;
     let is_dir = meta.is_dir();
 
-    let image_path = args
-        .image_path
-        .as_ref()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| get_default_image_path(&source_path, is_dir).unwrap());
-
-    // This is unlikely to happen, since compressed input is unsupported
-    // and this will fail anyway, but we check to avoid truncating the input accidentally
-    if image_path.exists() && absolute_path(&image_path)? == source_path {
-        return Err(anyhow::anyhow!("Source and destination paths are the same"));
-    }
-
-    if image_path.starts_with(&source_path) {
-        return Err(anyhow::anyhow!(
-            "Destination path is contained by source path"
-        ));
-    }
+    let image_path = match &args.image_path {
+        Some(image_path) => PathBuf::from(image_path),
+        None => default_image_path(&source_path, is_dir, "cso")?,
+    };
+    check_image_path(&source_path, &image_path)?;
 
     let mut output = ciso::split::SplitOutput::new(SplitStdFs, image_path);
 
@@ -130,7 +113,7 @@ pub async fn cmd_compress(args: &CompressArgs) -> Result<(), anyhow::Error> {
         ciso::write::write_ciso_image(&mut input, &mut output, progress_callback_compression)
             .await?;
     } else {
-        return Err(anyhow::anyhow!("Symlink image sources are not supported"));
+        bail!("Source must be a directory or an image file");
     }
 
     Ok(())

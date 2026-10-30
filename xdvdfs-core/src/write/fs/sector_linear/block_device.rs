@@ -16,7 +16,8 @@ pub enum SectorLinearBlockRegion {
     // Slice of data filling the region
     // Its length should be a multiple of sector size
     RawData(Box<[u8]>),
-    File { path: PathVec, sectors: u64 },
+    // A file of `len` bytes, zero-padded to the end of its last sector
+    File { path: PathVec, len: u64 },
     Fill { byte: u8, sectors: u64 },
 }
 
@@ -36,7 +37,7 @@ impl SectorLinearBlockRegion {
                 assert_eq!(len % (layout::SECTOR_SIZE as usize), 0);
                 len.div_ceil(layout::SECTOR_SIZE as usize) as u64
             }
-            Self::File { sectors, .. } => *sectors,
+            Self::File { len, .. } => len.div_ceil(layout::SECTOR_SIZE_U64),
             Self::Fill { sectors, .. } => *sectors,
         };
 
@@ -224,7 +225,7 @@ mod test {
             5,
             SectorLinearBlockRegion::File {
                 path: PathVec::default(),
-                sectors: 3,
+                len: 2 * 2048 + 1,
             },
         );
         assert_eq!(slbd.size(), 8 * 2048);
@@ -250,7 +251,7 @@ mod test {
             5,
             SectorLinearBlockRegion::File {
                 path: PathVec::default(),
-                sectors: 1,
+                len: 2048,
             },
         );
         assert_eq!(slbd.num_sectors(), 6);
@@ -286,7 +287,7 @@ mod test {
             5,
             SectorLinearBlockRegion::File {
                 path: PathVec::default(),
-                sectors: 0,
+                len: 0,
             },
         );
         assert_eq!(slbd.num_sectors(), 6);
