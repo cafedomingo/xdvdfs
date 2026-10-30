@@ -6,7 +6,8 @@ pub struct SectorAllocator {
 
 impl Default for SectorAllocator {
     fn default() -> Self {
-        // FIXME: Allow files to fill sectors 0..=31
+        // FIXME: Allow files to fill sectors 0..=31, except 16 and 17: the ISO 9660
+        // descriptors are written there after layout and would overwrite file data
         Self { next_free: 33 }
     }
 }

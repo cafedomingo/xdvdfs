@@ -109,6 +109,18 @@ where
         Ok(())
     }
 
+    /// Must run after padding: the volume space size is the final image length
+    fn write_iso9660_descriptors(&mut self) -> crate::Result<()> {
+        let sectors = (self.image.len()? / layout::SECTOR_SIZE_U64)
+            .try_into()
+            .expect("number of sectors should fit in u32");
+        self.image.write(
+            layout::ISO9660_DESCRIPTORS_OFFSET,
+            &layout::iso9660_descriptors(sectors),
+        )?;
+        Ok(())
+    }
+
     fn create_image(&mut self) -> crate::Result<()> {
         // The size of a directory entry depends on the size of
         // directory entries inside it (including directory tables).
@@ -175,6 +187,7 @@ where
 
         self.write_volume_descriptor(root_dirtab_size, root_sector)?;
         self.apply_image_alignment_padding()?;
+        self.write_iso9660_descriptors()?;
 
         self.progress_visitor.finished();
         Ok(())
@@ -524,6 +537,26 @@ mod test {
             slbd.get(63),
             SectorLinearBlockSectorContents::RawData(&empty_dirent_sector)
         );
+    }
+
+    #[test]
+    fn test_iso9660_descriptor() {
+        // 0 and 31 directories are padded up to a multiple of 32 sectors, 30 are not
+        for dirs in [0, 30, 31] {
+            let mut memfs = MemoryFilesystem::default();
+            for i in 0..dirs {
+                memfs.mkdir(std::format!("/{i}").as_str());
+            }
+            let image = image_bytes(memfs);
+            let sectors = (image.len() / layout::SECTOR_SIZE_USZ) as u32;
+
+            let descriptors = &image[layout::ISO9660_DESCRIPTORS_OFFSET as usize..];
+            let (primary, terminator) = descriptors.split_at(layout::SECTOR_SIZE_USZ);
+            assert_eq!(&primary[..7], b"\x01CD001\x01");
+            assert_eq!(&terminator[..7], b"\xffCD001\x01");
+            assert_eq!(primary[0x50..0x54], sectors.to_le_bytes());
+            assert_eq!(primary[0x54..0x58], sectors.to_be_bytes());
+        }
     }
 
     #[test]
