@@ -1,8 +1,8 @@
+use crate::Error;
 use crate::blockdev::BlockDeviceRead;
 use crate::layout::{
     DirectoryEntryNode, DirectoryEntryTable, SECTOR_SIZE, SECTOR_SIZE_U64, SECTOR_SIZE_USZ,
 };
-use crate::Error;
 use std::io;
 
 pub struct DirentScanIter<'a, BDR: BlockDeviceRead + ?Sized> {
@@ -109,6 +109,7 @@ impl DirectoryEntryTable {
 #[cfg(test)]
 mod test {
     use crate::{
+        Error,
         blockdev::BlockDeviceWrite,
         layout::{
             DirectoryEntryDiskData, DirectoryEntryDiskNode, DirectoryEntryNode,
@@ -123,7 +124,6 @@ mod test {
             },
             sector::SectorAllocator,
         },
-        Error,
     };
 
     fn name_bytes_from(name: &str) -> [u8; 256] {

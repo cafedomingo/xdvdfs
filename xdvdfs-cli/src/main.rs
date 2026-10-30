@@ -28,10 +28,8 @@ enum TopLevelCommand {
     ExtractXiso(exiso_compat::EXCommand),
 
     // Default any other multicall command to `xdvdfs`
-    // external_subcommand must parse into something, even if we don't use it,
-    // which necessitates the `dead_code` allow.
     #[command(external_subcommand)]
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "external_subcommand must parse into something")]
     External(Vec<String>),
 }
 

@@ -41,7 +41,7 @@ impl SectorAllocator {
 
 #[cfg(test)]
 mod test {
-    use super::{required_sectors, SectorAllocator};
+    use super::{SectorAllocator, required_sectors};
 
     #[test]
     fn test_required_sectors_zero_len() {

@@ -46,13 +46,13 @@ mod test {
     use sha3::{Digest, Sha3_256};
 
     use crate::{
-        read::{read_volume, DATA_CHUNK_LEN},
+        read::{DATA_CHUNK_LEN, read_volume},
         write::{
             fs::{
                 MemoryFilesystem, SectorLinearBlockDevice, SectorLinearBlockFilesystem,
                 SectorLinearImage,
             },
-            img::{create_xdvdfs_image, NoOpProgressVisitor},
+            img::{NoOpProgressVisitor, create_xdvdfs_image},
         },
     };
 

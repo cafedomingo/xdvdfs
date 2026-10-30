@@ -126,8 +126,12 @@ fn checksum_single(img_path: &str) -> anyhow::Result<()> {
 pub fn cmd_checksum(args: &ChecksumArgs) -> anyhow::Result<()> {
     if !args.silent {
         eprintln!("This SHA256 sum is a condensed checksum of the all the data inside the image");
-        eprintln!("It does not encode information about the filesystem structure outside of the data being in the correct order.");
-        eprintln!("Note that this is NOT a SHA256 sum of the full image, and cannot be compared to a SHA256 sum of the full image.");
+        eprintln!(
+            "It does not encode information about the filesystem structure outside of the data being in the correct order."
+        );
+        eprintln!(
+            "Note that this is NOT a SHA256 sum of the full image, and cannot be compared to a SHA256 sum of the full image."
+        );
         eprintln!(
             "This checksum is only useful when compared to other checksums created by this tool."
         );

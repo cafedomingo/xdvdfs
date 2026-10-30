@@ -214,7 +214,7 @@ mod test {
     use crate::write::img::NoOpProgressVisitor;
 
     use super::fs::DirectoryTreeEntry;
-    use super::{create_dirent_tables, create_xdvdfs_image, ProgressInfo};
+    use super::{ProgressInfo, create_dirent_tables, create_xdvdfs_image};
     use crate::Error;
 
     #[test]

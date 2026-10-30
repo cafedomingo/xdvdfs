@@ -1,7 +1,10 @@
 use std::io;
 
 /// Trait for write operations on some block device
-#[allow(clippy::len_without_is_empty)]
+#[expect(
+    clippy::len_without_is_empty,
+    reason = "a device's length is a fallible I/O query"
+)]
 pub trait BlockDeviceWrite {
     fn write(&mut self, offset: u64, buffer: &[u8]) -> io::Result<()>;
     fn len(&mut self) -> io::Result<u64>;

@@ -1,14 +1,18 @@
 [workspace]
 members = ["xdvdfs-core", "xdvdfs-cli"]
-resolver = "2"
+resolver = "3"
 
 [workspace.package]
 license = "MIT"
 version = "0.9.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.99"
 repository = "https://github.com/cafedomingo/xdvdfs"
 homepage = "https://github.com/cafedomingo/xdvdfs"
 publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
 
 [profile.release]
 strip = true

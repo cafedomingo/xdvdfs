@@ -59,10 +59,10 @@ mod test {
     use std::io::ErrorKind;
 
     use crate::{
+        Error,
         write::fs::{
             FilesystemCopier, ImagePath, MemoryFilesystem, SectorLinearBlockSectorContents,
         },
-        Error,
     };
 
     use super::{SectorLinearBlockDevice, SectorLinearBlockFilesystem};

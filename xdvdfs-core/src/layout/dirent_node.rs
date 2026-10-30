@@ -1,7 +1,7 @@
 use encoding_rs::WINDOWS_1252;
 use std::borrow::Cow;
 
-use super::{is_safe_name, DirectoryEntryDiskNode};
+use super::{DirectoryEntryDiskNode, is_safe_name};
 use crate::Error;
 
 /// In-memory structure to contain an on-disk tree node and

@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 
+use crate::Error;
 use crate::blockdev::{BlockDeviceRead, BlockDeviceWrite};
 use crate::layout::DirectoryEntryNode;
 use crate::read::TableRanges;
-use crate::Error;
 
 use super::FilesystemCopier;
 use super::FilesystemHierarchy;
@@ -180,21 +180,21 @@ mod test {
     use std::io::Cursor;
 
     use crate::{
+        Error,
         blockdev::BlockDeviceRead,
         layout::{
             DirectoryEntryDiskData, DirectoryEntryDiskNode, DirectoryEntryTable, DirentAttributes,
-            DiskRegion, VolumeDescriptor, SECTOR_SIZE, SECTOR_SIZE_U64, SECTOR_SIZE_USZ,
+            DiskRegion, SECTOR_SIZE, SECTOR_SIZE_U64, SECTOR_SIZE_USZ, VolumeDescriptor,
         },
         read::read_volume,
         write::{
             fs::{
-                dir_tree, FileEntry, FileType, FilesystemCopier, FilesystemHierarchy, ImagePath,
+                FileEntry, FileType, FilesystemCopier, FilesystemHierarchy, ImagePath,
                 MemoryFilesystem, SectorLinearBlockDevice, SectorLinearBlockFilesystem,
-                SectorLinearImage,
+                SectorLinearImage, dir_tree,
             },
-            img::{create_xdvdfs_image, NoOpProgressVisitor},
+            img::{NoOpProgressVisitor, create_xdvdfs_image},
         },
-        Error,
     };
 
     use super::{DefaultCopier, XDVDFSFilesystem};

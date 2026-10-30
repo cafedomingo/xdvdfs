@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::io::{self, ErrorKind};
 
 use crate::{
-    write::fs::{FileEntry, FileType, FilesystemCopier, FilesystemHierarchy, ImagePath},
     Error,
+    write::fs::{FileEntry, FileType, FilesystemCopier, FilesystemHierarchy, ImagePath},
 };
 
 #[derive(Debug, Clone)]
@@ -138,8 +138,8 @@ mod test {
     use std::io::ErrorKind;
 
     use crate::{
-        write::fs::{FileEntry, FileType, ImagePath, MemoryFilesystem},
         Error,
+        write::fs::{FileEntry, FileType, ImagePath, MemoryFilesystem},
     };
 
     #[test]

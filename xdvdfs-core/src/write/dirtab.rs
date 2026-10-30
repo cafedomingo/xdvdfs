@@ -1,12 +1,12 @@
+use crate::Error;
 use crate::layout::{
-    self, is_safe_name, DirectoryEntryData, DirectoryEntryDiskNode, DirentAttributes, NameError,
+    self, DirectoryEntryData, DirectoryEntryDiskNode, DirentAttributes, NameError, is_safe_name,
 };
 use crate::write::avl;
 use crate::write::fs::ImagePath;
-use crate::Error;
 
 use super::avl::AvlNode;
-use super::sector::{required_sectors, SectorAllocator};
+use super::sector::{SectorAllocator, required_sectors};
 
 #[derive(Default)]
 pub struct AvlDirectoryEntryTableBuilder<'alloc> {
@@ -284,18 +284,18 @@ impl<'alloc> AvlDirectoryEntryTableWriter<'alloc> {
 #[cfg(test)]
 mod test {
     use crate::{
+        Error,
         layout::DirectoryEntryDiskNode,
         write::{
             dirtab::{DirtabWriterBuffers, FileListingEntry},
             fs::ImagePath,
             sector::SectorAllocator,
         },
-        Error,
     };
 
     use super::{
-        avl_index_to_offset, compute_offsets, dirent_data_to_disk_node, sector_align,
-        serialize_dirent_disk_node, AvlDirectoryEntryTableBuilder,
+        AvlDirectoryEntryTableBuilder, avl_index_to_offset, compute_offsets,
+        dirent_data_to_disk_node, sector_align, serialize_dirent_disk_node,
     };
 
     #[test]
