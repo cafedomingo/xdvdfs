@@ -64,9 +64,11 @@ impl<BDR: BlockDeviceRead + ?Sized> DirentScanIter<'_, BDR> {
             };
 
             let name_len = dirent.node.dirent.filename_length as usize;
-            let name_buf = &mut dirent.name[0..name_len];
-            assert!(name_offset + name_len <= SECTOR_SIZE_USZ);
-            name_buf.copy_from_slice(&self.sector_buf[name_offset..(name_offset + name_len)]);
+            let name = self
+                .sector_buf
+                .get(name_offset..(name_offset + name_len))
+                .ok_or(DirectoryEntryReadError::DeserializationFailed)?;
+            dirent.name[0..name_len].copy_from_slice(name);
 
             // Dirent is valid, advance cursor before returning
             self.offset = name_offset + name_len;
@@ -140,7 +142,7 @@ mod test {
             DirectoryEntryDiskData, DirectoryEntryDiskNode, DirectoryEntryNode,
             DirectoryEntryTable, DirentAttributes, DiskRegion,
         },
-        read::DirentScanIter,
+        read::{DirectoryEntryReadError, DirentScanIter},
         write::{
             dirtab::{AvlDirectoryEntryTableBuilder, DirtabWriterBuffers},
             fs::{
@@ -205,6 +207,40 @@ mod test {
 
         let next = block_on(scan_iter.next_entry());
         assert_eq!(next, Ok(None));
+    }
+
+    #[test]
+    fn test_scan_dirent_tree_name_past_sector_end() {
+        // A 0xe-byte header and 255-byte name, padded to a dword. Seven fit
+        // in the sector; the eighth's header fits but its name runs past the end.
+        const ENTRY_LEN: usize = 272;
+        #[rustfmt::skip]
+        let header = [
+            0, 0, 0, 0,
+            1, 0, 0, 0,
+            2, 0, 0, 0,
+            0, 255,
+        ];
+        let mut dev = [b'a'; 2048];
+        for entry in dev.chunks_mut(ENTRY_LEN) {
+            entry[..header.len()].copy_from_slice(&header);
+        }
+        let table = DirectoryEntryTable {
+            region: DiskRegion {
+                sector: 0,
+                size: 2048,
+            },
+        };
+
+        let mut iter = block_on(table.scan_dirent_tree(dev.as_mut_slice()))
+            .expect("Creating scan iter should succeed");
+        for _ in 0..7 {
+            let next = block_on(iter.next_entry()).expect("Entries in the sector should read");
+            assert!(next.is_some());
+        }
+
+        let next = block_on(iter.next_entry());
+        assert_eq!(next, Err(DirectoryEntryReadError::DeserializationFailed));
     }
 
     #[test]

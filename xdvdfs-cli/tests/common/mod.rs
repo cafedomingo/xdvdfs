@@ -23,6 +23,19 @@ pub fn assert_success(out: &Output) {
     );
 }
 
+/// Asserts xdvdfs reported an error, and returns its stderr. A Rust program
+/// exits 1 when `main` returns `Err`, but 101 when it panics.
+pub fn assert_error(out: &Output) -> String {
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "xdvdfs exited with {}\nstderr:\n{stderr}",
+        out.status
+    );
+    stderr
+}
+
 pub fn write_tree(root: &Path, files: &[(&str, &[u8])], empty_dirs: &[&str]) {
     fs::create_dir_all(root).unwrap();
     for dir in empty_dirs {

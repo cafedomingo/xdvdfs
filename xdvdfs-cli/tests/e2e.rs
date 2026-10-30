@@ -1,19 +1,25 @@
 mod common;
 
 use std::ffi::OsStr;
-use std::fs;
+use std::fs::{self, File};
 use std::path::Path;
 
-use common::{assert_success, assert_trees_equal, place_at_offset, write_tree, xdvdfs};
+use common::{
+    assert_error, assert_success, assert_trees_equal, place_at_offset, write_tree, xdvdfs,
+};
 use tempfile::tempdir;
 use xdvdfs::blockdev::XDVDFSOffsets;
+use xdvdfs::layout::DirectoryEntryDiskNode;
 
 // 0xe header bytes plus the name make 32-byte dirents, so table sizes
 // land on sector and offset boundaries.
 const NAME_LEN: usize = 18;
-const DIRENT_LEN: usize = 0xe + NAME_LEN;
+const DIRENT_HEADER_LEN: usize = 0xe;
+const DIRENT_LEN: usize = DIRENT_HEADER_LEN + NAME_LEN;
 const SECTOR_LEN: usize = 2048;
 const MAX_DIRENT_OFFSET: usize = 65536;
+// Mirrors cmd_unpack.rs, which tests can't import from the binary
+const EXTRACT_CHUNK_LEN: usize = 1 << 20;
 
 fn numbered(i: usize) -> String {
     format!("{i:0NAME_LEN$}")
@@ -46,6 +52,17 @@ fn pack_roundtrip(src: &Path, img: &Path) {
     let repacked_img = repacked.path().join("repacked.xiso");
     pack(img, &repacked_img);
     assert_unpacks_to(&repacked_img, src);
+}
+
+fn find_unique(haystack: &[u8], needle: &[u8]) -> usize {
+    let mut hits = haystack
+        .windows(needle.len())
+        .enumerate()
+        .filter(|(_, window)| *window == needle)
+        .map(|(at, _)| at);
+    let at = hits.next().expect("needle not found");
+    assert_eq!(hits.next(), None, "needle found more than once");
+    at
 }
 
 fn pack_case(files: &[(&str, &[u8])], empty_dirs: &[&str]) {
@@ -200,9 +217,14 @@ fn xgd2_offset_image() {
     let work = tempdir().unwrap();
     let src = work.path().join("src");
     let img = work.path().join("img.xiso");
+    let multi_chunk = vec![3; 2 * EXTRACT_CHUNK_LEN + 17];
     write_tree(
         &src,
-        &[("default.xbe", &[1; 5000]), ("a/f1", &[2; 100])],
+        &[
+            ("default.xbe", &[1; 5000]),
+            ("a/f1", &[2; 100]),
+            ("multi_chunk", &multi_chunk),
+        ],
         &["empty"],
     );
     pack(&src, &img);
@@ -220,4 +242,93 @@ fn xgd2_offset_image() {
         copy.as_ref(),
     ]);
     assert_unpacks_to(&copy, &src);
+}
+
+#[test]
+fn unpack_rejects_path_escape() {
+    let work = tempdir().unwrap();
+    let src = work.path().join("src");
+    let img = work.path().join("img.xiso");
+    write_tree(&src, &[("xx_escape", b"data")], &[]);
+    pack(&src, &img);
+
+    let mut bytes = fs::read(&img).unwrap();
+    let escape = b"../escape";
+    let name_at = find_unique(&bytes, b"xx_escape");
+    bytes[name_at..][..escape.len()].copy_from_slice(escape);
+    fs::write(&img, bytes).unwrap();
+
+    let out = work.path().join("out");
+    assert_error(&xdvdfs(&["unpack".as_ref(), img.as_ref(), out.as_ref()]));
+    assert!(!work.path().join("escape").exists());
+}
+
+#[test]
+fn unpack_twice_into_same_dir() {
+    let work = tempdir().unwrap();
+    let src = work.path().join("src");
+    let img = work.path().join("img.xiso");
+    write_tree(&src, &[("sub/f", b"data")], &[]);
+    pack(&src, &img);
+
+    let out = work.path().join("out");
+    unpack(&img, &out);
+    unpack(&img, &out);
+    assert_trees_equal(&src, &out);
+}
+
+#[test]
+fn unpack_truncated_image_fails() {
+    let work = tempdir().unwrap();
+    let src = work.path().join("src");
+    let img = work.path().join("img.xiso");
+    write_tree(&src, &[("big.bin", &vec![1; 1_000_000])], &[]);
+    pack(&src, &img);
+    File::options()
+        .write(true)
+        .open(&img)
+        .unwrap()
+        .set_len(600_000)
+        .unwrap();
+
+    let out = tempdir().unwrap();
+    let unpack = xdvdfs(&["unpack".as_ref(), img.as_ref(), out.path().as_ref()]);
+    let stderr = assert_error(&unpack);
+    assert!(stderr.contains("big.bin"), "unpack printed:\n{stderr}");
+
+    let copy_out = xdvdfs(&[
+        "copy-out".as_ref(),
+        img.as_ref(),
+        "/big.bin".as_ref(),
+        out.path().join("big.bin").as_ref(),
+    ]);
+    let stderr = assert_error(&copy_out);
+    assert!(stderr.contains("big.bin"), "copy-out printed:\n{stderr}");
+}
+
+#[test]
+fn unpack_dot_errors() {
+    assert_error(&xdvdfs(&["unpack".as_ref(), ".".as_ref()]));
+}
+
+#[test]
+fn pack_rejects_image_directory_loop() {
+    let work = tempdir().unwrap();
+    let src = work.path().join("src");
+    let img = work.path().join("img.xiso");
+    write_tree(&src, &[("loop_dir/f", b"data")], &[]);
+    pack(&src, &img);
+
+    // The root table holds only `loop_dir`, so the sector holding its entry
+    // is the root's.
+    let mut bytes = fs::read(&img).unwrap();
+    let header_at = find_unique(&bytes, b"loop_dir") - DIRENT_HEADER_LEN;
+    let header = bytes[header_at..][..DIRENT_HEADER_LEN].try_into().unwrap();
+    let mut node = DirectoryEntryDiskNode::deserialize(header).unwrap();
+    node.dirent.data.sector = (header_at / SECTOR_LEN) as u32;
+    node.serialize_into(&mut bytes[header_at..]).unwrap();
+    fs::write(&img, bytes).unwrap();
+
+    let out = work.path().join("out.xiso");
+    assert_error(&xdvdfs(&["pack".as_ref(), img.as_ref(), out.as_ref()]));
 }
