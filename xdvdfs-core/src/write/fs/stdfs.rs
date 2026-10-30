@@ -3,10 +3,11 @@ use std::fs::{self, DirEntry, File};
 use std::io::{self, ErrorKind, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-use super::{FileEntry, FileType, FilesystemCopier, FilesystemHierarchy, PathRef};
+use super::{FileEntry, FileType, FilesystemCopier, FilesystemHierarchy, ImagePath};
 
 pub struct StdFilesystem {
     root: PathBuf,
+    last_opened: Option<(ImagePath, File)>,
 }
 
 fn path_error(path: &Path, kind: ErrorKind, what: impl Display) -> io::Error {
@@ -31,7 +32,22 @@ impl StdFilesystem {
     pub fn create(root: &Path) -> Self {
         Self {
             root: root.to_owned(),
+            last_opened: None,
         }
+    }
+
+    /// Fills `buf` from byte `offset` of `src`. Compression reads a file one
+    /// sector at a time, so this keeps the last file it opened.
+    fn read_file_at(&mut self, src: &ImagePath, offset: u64, buf: &mut [u8]) -> io::Result<()> {
+        let file = match &mut self.last_opened {
+            Some((path, file)) if *path == *src => file,
+            last_opened => {
+                let file = File::open(src.to_os_path(&self.root))?;
+                &mut last_opened.insert((src.clone(), file)).1
+            }
+        };
+        file.seek(SeekFrom::Start(offset))?;
+        file.read_exact(buf)
     }
 
     fn file_entry(&self, dir: &Path, entry: DirEntry) -> io::Result<FileEntry> {
@@ -92,8 +108,8 @@ impl StdFilesystem {
 }
 
 impl FilesystemHierarchy for StdFilesystem {
-    fn read_dir(&mut self, dir: PathRef<'_>) -> crate::Result<Vec<FileEntry>> {
-        let dir = dir.as_path_buf(&self.root);
+    fn read_dir(&mut self, dir: &ImagePath) -> crate::Result<Vec<FileEntry>> {
+        let dir = dir.to_os_path(&self.root);
         let entries = fs::read_dir(&dir)
             .map_err(|err| path_error(&dir, err.kind(), err))?
             .map(|entry| {
@@ -111,7 +127,7 @@ where
 {
     fn copy_file_in(
         &mut self,
-        src: PathRef<'_>,
+        src: &ImagePath,
         dest: &mut T,
         input_offset: u64,
         output_offset: u64,
@@ -119,7 +135,7 @@ where
     ) -> crate::Result<u64> {
         dest.seek(SeekFrom::Start(output_offset))?;
 
-        let src = src.as_path_buf(&self.root);
+        let src = src.to_os_path(&self.root);
         let file = open_at(&src, input_offset).map_err(|err| path_error(&src, err.kind(), err))?;
         let mut file = io::BufReader::with_capacity(1024 * 1024, file.take(size));
         let copied = io::copy(&mut file, dest).map_err(|err| path_error(&src, err.kind(), err))?;
@@ -134,23 +150,23 @@ where
 impl FilesystemCopier<[u8]> for StdFilesystem {
     fn copy_file_in(
         &mut self,
-        src: PathRef<'_>,
+        src: &ImagePath,
         dest: &mut [u8],
         input_offset: u64,
         output_offset: u64,
         size: u64,
     ) -> crate::Result<u64> {
-        let src = src.as_path_buf(&self.root);
         let output_offset = output_offset as usize;
         let size = core::cmp::min(size as usize, <[u8]>::len(dest) - output_offset);
         let dest = &mut dest[output_offset..(output_offset + size)];
 
-        open_at(&src, input_offset)
-            .and_then(|mut file| file.read_exact(dest))
-            .map_err(|err| match err.kind() {
+        self.read_file_at(src, input_offset, dest).map_err(|err| {
+            let src = src.to_os_path(&self.root);
+            match err.kind() {
                 ErrorKind::UnexpectedEof => short_file_error(&src),
                 kind => path_error(&src, kind, err),
-            })?;
+            }
+        })?;
         Ok(size as u64)
     }
 }
@@ -161,8 +177,8 @@ mod test {
 
     use crate::{
         write::fs::{
-            FileEntry, FileType, FilesystemCopier, FilesystemHierarchy, SectorLinearBlockDevice,
-            SectorLinearBlockFilesystem, SectorLinearImage,
+            FileEntry, FileType, FilesystemCopier, FilesystemHierarchy, ImagePath,
+            SectorLinearBlockDevice, SectorLinearBlockFilesystem, SectorLinearImage,
         },
         Error,
     };
@@ -186,7 +202,9 @@ mod test {
 
         let mut stdfs = StdFilesystem::create(tempdir.path());
 
-        let mut result = stdfs.read_dir("/".into()).expect("read_dir should succeed");
+        let mut result = stdfs
+            .read_dir(&ImagePath::root())
+            .expect("read_dir should succeed");
 
         // Filesystem ordering is non-deterministic,
         // so sort the records by name.
@@ -208,7 +226,7 @@ mod test {
         );
 
         let result = stdfs
-            .read_dir("/subdir".into())
+            .read_dir(&"/subdir".into())
             .expect("read_dir should succeed");
         assert_eq!(
             result,
@@ -237,7 +255,7 @@ mod test {
         let mut cursor = Cursor::new(Vec::<u8>::new());
 
         let result = stdfs.copy_file_in(
-            "subdir/file".into(),
+            &"subdir/file".into(),
             &mut cursor,
             /*input_offset=*/ 1,
             /*output_offset=*/ 2,
@@ -264,7 +282,7 @@ mod test {
         let mut buffer = [0u8; 13];
 
         let result = stdfs.copy_file_in(
-            "subdir/file".into(),
+            &"subdir/file".into(),
             buffer.as_mut_slice(),
             /*input_offset=*/ 1,
             /*output_offset=*/ 2,
@@ -272,6 +290,22 @@ mod test {
         );
         assert!(result.is_ok_and(|len| len == 10));
         assert_eq!(&buffer, b"\0\0ello World\0");
+    }
+
+    #[test]
+    fn test_write_stdfs_byte_slice_copier_switches_files() {
+        let tempdir = tempfile::tempdir().expect("Failed to create tempdir");
+        std::fs::write(tempdir.path().join("a"), b"0123").expect("Failed to write a");
+        std::fs::write(tempdir.path().join("b"), b"abcd").expect("Failed to write b");
+
+        let mut stdfs = StdFilesystem::create(tempdir.path());
+        for (name, offset, expected) in [("a", 0, b"01"), ("b", 1, b"bc"), ("a", 2, b"23")] {
+            let mut buffer = [0u8; 2];
+            stdfs
+                .copy_file_in(&name.into(), buffer.as_mut_slice(), offset, 0, 2)
+                .expect("Copy should succeed");
+            assert_eq!(&buffer, expected, "{name} from {offset}");
+        }
     }
 
     #[test]
@@ -284,7 +318,7 @@ mod test {
         let mut cursor = Cursor::new(Vec::<u8>::new());
 
         let result = stdfs.copy_file_in(
-            "file".into(),
+            &"file".into(),
             &mut cursor,
             /*input_offset=*/ 0,
             /*output_offset=*/ 0,
@@ -310,7 +344,7 @@ mod test {
         let mut buffer = [0u8; 16];
 
         let result = stdfs.copy_file_in(
-            "file".into(),
+            &"file".into(),
             buffer.as_mut_slice(),
             /*input_offset=*/ 0,
             /*output_offset=*/ 0,
@@ -334,7 +368,7 @@ mod test {
         let mut slbfs = SectorLinearBlockFilesystem::new(StdFilesystem::create(dir));
         let mut slbd = SectorLinearBlockDevice::default();
         slbfs
-            .copy_file_in("/file".into(), &mut slbd, 0, 0, listed_len)
+            .copy_file_in(&"/file".into(), &mut slbd, 0, 0, listed_len)
             .expect("Adding the file should succeed");
 
         let mut image = SectorLinearImage::new(&slbd, &mut slbfs);
@@ -379,7 +413,9 @@ mod test {
         symlink("../dir", src.join("dir_link")).expect("Failed to link dir");
 
         let mut stdfs = StdFilesystem::create(&src);
-        let mut result = stdfs.read_dir("/".into()).expect("read_dir should succeed");
+        let mut result = stdfs
+            .read_dir(&ImagePath::root())
+            .expect("read_dir should succeed");
         result.sort();
         assert_eq!(
             result,

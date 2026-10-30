@@ -81,7 +81,7 @@ where
                     let file_read =
                         core::cmp::min(to_read, len.saturating_sub(file_offset) as usize);
                     self.fs.fs.copy_file_in(
-                        path.into(),
+                        path,
                         &mut buffer[index..(index + file_read)],
                         file_offset,
                         0,
@@ -144,7 +144,7 @@ where
 
 #[cfg(test)]
 mod test {
-    use crate::write::fs::{MemoryFilesystem, PathVec, SectorLinearBlockRegion};
+    use crate::write::fs::{ImagePath, MemoryFilesystem, SectorLinearBlockRegion};
 
     use super::{SectorLinearBlockDevice, SectorLinearBlockFilesystem, SectorLinearImage};
 
@@ -244,7 +244,7 @@ mod test {
         let mut slbd = SectorLinearBlockDevice::default();
         let mut slbfs = SectorLinearBlockFilesystem::new(memfs);
 
-        let path = PathVec::from("/a/b");
+        let path = ImagePath::from("/a/b");
         slbd.contents
             .insert(0, SectorLinearBlockRegion::File { path, len: 4000 });
 
@@ -263,7 +263,7 @@ mod test {
         let mut slbd = SectorLinearBlockDevice::default();
         let mut slbfs = SectorLinearBlockFilesystem::new(memfs);
 
-        let path = PathVec::from("/a/b");
+        let path = ImagePath::from("/a/b");
         slbd.contents
             .insert(0, SectorLinearBlockRegion::File { path, len: 4000 });
 
@@ -286,7 +286,7 @@ mod test {
         let mut slbd = SectorLinearBlockDevice::default();
         let mut slbfs = SectorLinearBlockFilesystem::new(memfs);
 
-        let path = PathVec::from("/a/b");
+        let path = ImagePath::from("/a/b");
         slbd.contents
             .insert(0, SectorLinearBlockRegion::File { path, len: 4000 });
 

@@ -63,7 +63,7 @@ pub fn cmd_compress(args: &CompressArgs) -> Result<(), anyhow::Error> {
     } else {
         Cow::Borrowed("")
     };
-    let progress_callback = |pi: ProgressInfo<'_>| match pi {
+    let progress_callback = |pi: ProgressInfo| match pi {
         ProgressInfo::DirAdded(path, sector) => {
             println!("Added dir: {source_prefix}{path} at sector {sector}");
         }

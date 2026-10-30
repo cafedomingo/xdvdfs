@@ -11,6 +11,7 @@ use xdvdfs::{
     blockdev::OffsetWrapper,
     layout::{DirectoryEntryDiskData, DirectoryEntryTable},
     read::DATA_CHUNK_LEN,
+    write::fs::ImagePath,
 };
 
 fn extract_file(
@@ -46,14 +47,13 @@ fn extract_file(
 fn copyout_directory(
     img: &mut OffsetWrapper<BufReader<File>>,
     dest_dir: &Path,
-    dir: &str,
+    dir: &ImagePath,
     dirtab: &DirectoryEntryTable,
 ) -> anyhow::Result<()> {
     let tree = dirtab.file_tree(img).map_err(under_dir(dir))?;
 
     for (dir, dirent) in &tree {
-        let dir = dir.trim_start_matches('/');
-        let dirname = dest_dir.join(dir);
+        let dirname = dir.to_os_path(dest_dir);
         let file_name = dirent.name_str()?;
         let file_path = dirname.join(&*file_name);
         let is_dir = dirent.node.dirent.is_directory();
@@ -100,7 +100,12 @@ pub fn cmd_unpack(args: &UnpackArgs) -> Result<(), anyhow::Error> {
     let mut img = open_image_raw(Path::new(&args.image_path))?;
     let volume = xdvdfs::read::read_volume(&mut img)?;
 
-    copyout_directory(&mut img, &target_dir, "/", &volume.root_table)
+    copyout_directory(
+        &mut img,
+        &target_dir,
+        &ImagePath::root(),
+        &volume.root_table,
+    )
 }
 
 #[derive(Args)]
@@ -121,13 +126,14 @@ pub fn cmd_copyout(args: &CopyOutArgs) -> Result<(), anyhow::Error> {
     let dest_path = Path::new(&args.dest_path);
 
     let volume = xdvdfs::read::read_volume(&mut img)?;
-    if args.src_path == "/" {
-        return copyout_directory(&mut img, dest_path, "/", &volume.root_table);
+    let src_path = ImagePath::from(args.src_path.as_str());
+    if src_path.is_root() {
+        return copyout_directory(&mut img, dest_path, &src_path, &volume.root_table);
     }
 
-    let dirent = volume.root_table.walk_path(&mut img, &args.src_path)?;
+    let dirent = volume.root_table.walk_path(&mut img, &src_path)?;
     if let Some(table) = dirent.node.dirent.dirent_table() {
-        return copyout_directory(&mut img, dest_path, &args.src_path, &table);
+        return copyout_directory(&mut img, dest_path, &src_path, &table);
     }
 
     extract_file(&mut img, &dirent.node.dirent, dest_path)

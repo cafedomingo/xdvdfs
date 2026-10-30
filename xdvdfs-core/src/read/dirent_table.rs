@@ -1,6 +1,7 @@
 use crate::blockdev::BlockDeviceRead;
 use crate::layout::{cmp_ignore_case_utf8, DirectoryEntryNode, DirectoryEntryTable};
 use crate::read::TableRanges;
+use crate::write::fs::ImagePath;
 use crate::Error;
 use std::collections::BTreeSet;
 
@@ -76,22 +77,17 @@ impl DirectoryEntryTable {
     pub fn walk_path<BDR: BlockDeviceRead + ?Sized>(
         &self,
         dev: &mut BDR,
-        path: &str,
+        path: &ImagePath,
     ) -> crate::Result<DirectoryEntryNode> {
         log::debug!("[walk_path] Called on {}", path);
-        let path = path.trim_start_matches('/');
-        if path.is_empty() {
-            return Err(Error::NoDirent);
-        }
-
         let mut dirent_tab = *self;
-        let mut dir = String::new();
-        let mut path_iter = path.split_terminator('/').peekable();
+        let mut dir = ImagePath::root();
+        let mut path_iter = path.components().peekable();
 
         while let Some(segment) = path_iter.next() {
             let dirent = dirent_tab
                 .find_dirent(dev, segment)
-                .map_err(|err| err.in_directory(dir.as_str()))?;
+                .map_err(|err| err.in_directory(dir.clone()))?;
             log::debug!("[walk_path] Found dirent: {:?}", dirent.name_str());
             log::trace!("[walk_path] Node: {:?}", dirent.node);
             let dirent_data = &dirent.node.dirent;
@@ -101,11 +97,10 @@ impl DirectoryEntryTable {
             }
 
             dirent_tab = dirent_data.dirent_table().ok_or(Error::IsNotDirectory)?;
-            dir.push('/');
-            dir.push_str(segment);
+            dir.push(segment);
         }
 
-        unreachable!("path_iter has been consumed without returning last dirent")
+        Err(Error::NoDirent)
     }
 
     /// Walks the directory entry table in preorder, returning all directory entries.
@@ -150,17 +145,17 @@ impl DirectoryEntryTable {
     pub fn file_tree<BDR: BlockDeviceRead + ?Sized>(
         &self,
         dev: &mut BDR,
-    ) -> crate::Result<Vec<(String, DirectoryEntryNode)>> {
+    ) -> crate::Result<Vec<(ImagePath, DirectoryEntryNode)>> {
         let mut dirents = vec![];
 
         // Only tables with entries count: empty ones may share an all-padding sector
         let mut tables_read = TableRanges::default();
-        let mut stack = vec![(String::from(""), *self)];
+        let mut stack = vec![(ImagePath::root(), *self)];
         while let Some((parent, tree)) = stack.pop() {
             log::debug!("[file_tree] Descending through {}", parent);
             let children = tree
                 .walk_dirent_tree(dev)
-                .map_err(|err| err.in_directory(parent.as_str()))?;
+                .map_err(|err| err.in_directory(parent.clone()))?;
             if !children.is_empty() && tables_read.overlapping_or_insert(&tree, || ()).is_some() {
                 return Err(Error::Loop);
             }
@@ -168,7 +163,7 @@ impl DirectoryEntryTable {
             for child in children {
                 if let Some(dirent_table) = child.node.dirent.dirent_table() {
                     let child_name = child.name_str()?;
-                    stack.push((format!("{parent}/{child_name}"), dirent_table));
+                    stack.push((parent.join(&child_name), dirent_table));
                 }
 
                 dirents.push((parent.clone(), child));
@@ -500,7 +495,7 @@ mod test {
             },
         };
 
-        let res = table.walk_path(dev.as_mut_slice(), "/");
+        let res = table.walk_path(dev.as_mut_slice(), &"/".into());
         assert!(matches!(res, Err(Error::NoDirent)));
     }
 
@@ -531,7 +526,7 @@ mod test {
         };
 
         let res = table
-            .walk_path(dev.as_mut_slice(), "/B")
+            .walk_path(dev.as_mut_slice(), &"/B".into())
             .expect("Path walk should succeed");
         assert_eq!(res.offset, 1020);
     }
@@ -546,7 +541,7 @@ mod test {
             },
         };
 
-        let res = table.walk_path(dev.as_mut_slice(), "/C");
+        let res = table.walk_path(dev.as_mut_slice(), &"/C".into());
         assert!(matches!(res, Err(Error::Loop)));
     }
 
@@ -560,7 +555,7 @@ mod test {
             },
         };
 
-        let res = table.walk_path(dev.as_mut_slice(), "//");
+        let res = table.walk_path(dev.as_mut_slice(), &"//".into());
         assert!(matches!(res, Err(Error::NoDirent)));
     }
 
@@ -819,7 +814,7 @@ mod test_with_write {
         },
         write::{
             fs::{
-                MemoryFilesystem, SectorLinearBlockDevice, SectorLinearBlockFilesystem,
+                ImagePath, MemoryFilesystem, SectorLinearBlockDevice, SectorLinearBlockFilesystem,
                 SectorLinearImage,
             },
             img::NoOpProgressVisitor,
@@ -866,7 +861,7 @@ mod test_with_write {
         let mut dev = SectorLinearImage::new(&slbd, &mut slbfs);
 
         let res = table
-            .walk_path(&mut dev, "/Bd/CE/Ac")
+            .walk_path(&mut dev, &"/Bd/CE/Ac".into())
             .expect("Path walk should succeed");
         assert_eq!(
             res,
@@ -914,17 +909,17 @@ mod test_with_write {
             .expect("File tree should not fail");
         assert_eq!(tree.len(), 6);
 
-        assert_eq!(&tree[0].0, "");
+        assert_eq!(tree[0].0, ImagePath::root());
         assert_eq!(tree[0].1.name, name_bytes_from("a"));
-        assert_eq!(&tree[1].0, "");
+        assert_eq!(tree[1].0, ImagePath::root());
         assert_eq!(tree[1].1.name, name_bytes_from("f"));
-        assert_eq!(&tree[2].0, "/a");
+        assert_eq!(tree[2].0, ImagePath::from("/a"));
         assert_eq!(tree[2].1.name, name_bytes_from("b"));
-        assert_eq!(&tree[3].0, "/a");
+        assert_eq!(tree[3].0, ImagePath::from("/a"));
         assert_eq!(tree[3].1.name, name_bytes_from("e"));
-        assert_eq!(&tree[4].0, "/a/b");
+        assert_eq!(tree[4].0, ImagePath::from("/a/b"));
         assert_eq!(tree[4].1.name, name_bytes_from("c"));
-        assert_eq!(&tree[5].0, "/a/b");
+        assert_eq!(tree[5].0, ImagePath::from("/a/b"));
         assert_eq!(tree[5].1.name, name_bytes_from("d"));
     }
 }

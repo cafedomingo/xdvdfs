@@ -1,6 +1,7 @@
 use crate::img::open_image;
 use clap::Args;
 use std::path::Path;
+use xdvdfs::write::fs::ImagePath;
 
 #[derive(Args)]
 #[command(about = "List files in an image")]
@@ -23,19 +24,20 @@ pub fn cmd_ls(args: &LsArgs) -> anyhow::Result<()> {
     let mut img = open_image(Path::new(&args.image_path))?;
     let volume = xdvdfs::read::read_volume(img.as_mut())?;
 
-    let dirent_table = if args.path == "/" {
+    let path = ImagePath::from(args.path.as_str());
+    let dirent_table = if path.is_root() {
         volume.root_table
     } else {
         volume
             .root_table
-            .walk_path(img.as_mut(), &args.path)?
+            .walk_path(img.as_mut(), &path)?
             .node
             .dirent
             .dirent_table()
             .ok_or(anyhow::anyhow!("Not a directory"))?
     };
 
-    let in_dir = |err: xdvdfs::Error| err.in_directory(args.path.as_str());
+    let in_dir = |err: xdvdfs::Error| err.in_directory(path.clone());
     if args.scan {
         let mut iter = dirent_table
             .scan_dirent_tree(img.as_mut())
@@ -79,16 +81,14 @@ pub fn cmd_tree(args: &TreeArgs) -> anyhow::Result<()> {
 
     for (dir, file) in &tree {
         let is_dir = file.node.dirent.is_directory();
-        let name = file.name_str()?;
+        let path = dir.join(&file.name_str()?);
         if is_dir {
-            println!("{dir}/{name}/ (0 bytes)");
+            println!("{path}/ (0 bytes)");
         } else {
             total_size += file.node.dirent.data.size as usize;
             file_count += 1;
 
-            println!("{}/{} ({} bytes)", dir, name, {
-                file.node.dirent.data.size
-            });
+            println!("{} ({} bytes)", path, { file.node.dirent.data.size });
         }
     }
 

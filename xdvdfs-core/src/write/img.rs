@@ -5,20 +5,20 @@ use crate::write::{fs, sector};
 use super::dirtab::{
     AvlDirectoryEntryTableBuilder, AvlDirectoryEntryTableWriter, DirtabWriterBuffers,
 };
-use super::fs::{DirectoryTreeEntry, FilesystemCopier, FilesystemHierarchy, PathRef, PathVec};
+use super::fs::{DirectoryTreeEntry, FilesystemCopier, FilesystemHierarchy, ImagePath};
 use crate::Error;
 
 pub use super::progress_info::*;
 
 struct DirentTableVec<'a> {
-    dirent_tables: Vec<(PathRef<'a>, AvlDirectoryEntryTableWriter<'a>)>,
+    dirent_tables: Vec<(&'a ImagePath, AvlDirectoryEntryTableWriter<'a>)>,
     count: usize,
 }
 
 fn create_dirent_tables<'a>(
     dirtree: &'a [DirectoryTreeEntry],
 ) -> crate::Result<DirentTableVec<'a>> {
-    let mut dirent_tables: Vec<(PathRef<'_>, AvlDirectoryEntryTableWriter<'a>)> =
+    let mut dirent_tables: Vec<(&ImagePath, AvlDirectoryEntryTableWriter<'a>)> =
         Vec::with_capacity(dirtree.len());
     let mut dtab_size_map: Vec<u32> = vec![0u32; dirtree.len()];
     let mut count = 0;
@@ -36,19 +36,17 @@ fn create_dirent_tables<'a>(
 
             match entry.file_type {
                 fs::FileType::Directory => {
-                    debug_assert_eq!(
-                        dirtree[*dir_index].dir.as_path_ref(),
-                        path.as_path_ref().join(file_name),
-                    );
+                    debug_assert_eq!(dirtree[*dir_index].dir, path.join(file_name));
 
                     let dir_size = dtab_size_map[*dir_index];
                     debug_assert_ne!(dir_size, 0);
                     dirtab.add_dir(file_name, dir_size, *dir_index)?;
                 }
                 fs::FileType::File => {
-                    let file_size = entry.len.try_into().map_err(|_| {
-                        Error::FileTooLarge(PathVec::from_base(path.clone(), file_name))
-                    })?;
+                    let file_size = entry
+                        .len
+                        .try_into()
+                        .map_err(|_| Error::FileTooLarge(path.join(file_name)))?;
                     dirtab.add_file(file_name, file_size)?;
                 }
             }
@@ -58,7 +56,6 @@ fn create_dirent_tables<'a>(
         // then pass it through the dirtab writer so it can be used as to look-up
         // sectors in the forward pass.
         let dtw = dirtab.build()?;
-        let path = PathRef::from(path);
 
         dtab_size_map[dir_idx] = dtw.dirtab_size();
         dirent_tables.push((path, dtw));
@@ -165,7 +162,7 @@ where
 
             for entry in dirtab.iter() {
                 let file_path = path.join(entry.name);
-                self.progress_visitor.file_added(file_path, entry.sector);
+                self.progress_visitor.file_added(&file_path, entry.sector);
 
                 if entry.is_dir {
                     dir_sectors[entry.idx] = entry.sector;
@@ -173,7 +170,7 @@ where
                 }
 
                 self.fs.copy_file_in(
-                    file_path,
+                    &file_path,
                     self.image,
                     0,
                     entry.sector * layout::SECTOR_SIZE as u64,
@@ -214,10 +211,10 @@ mod test {
     use crate::layout;
     use crate::write::dirtab::FileListingEntry;
     use crate::write::fs::{
-        FileEntry, MemoryFilesystem, PathRef, PathVec, SectorLinearBlockDevice,
+        FileEntry, ImagePath, MemoryFilesystem, SectorLinearBlockDevice,
         SectorLinearBlockFilesystem, SectorLinearBlockSectorContents,
     };
-    use crate::write::img::{NoOpProgressVisitor, OwnedProgressInfo};
+    use crate::write::img::NoOpProgressVisitor;
 
     use super::fs::DirectoryTreeEntry;
     use super::{create_dirent_tables, create_xdvdfs_image, ProgressInfo};
@@ -270,7 +267,7 @@ mod test {
 
         let res = create_dirent_tables(dirtree).map(|tables| tables.count);
         assert!(
-            matches!(&res, Err(Error::FileTooLarge(path)) if *path == PathVec::from("/a/big")),
+            matches!(&res, Err(Error::FileTooLarge(path)) if *path == ImagePath::from("/a/big")),
             "{res:?}"
         );
     }
@@ -364,7 +361,7 @@ mod test {
         assert_eq!(dirtabs.dirent_tables.len(), 2);
 
         let root = dirtabs.dirent_tables.last().unwrap();
-        assert_eq!(root.0, PathVec::default());
+        assert_eq!(*root.0, ImagePath::root());
         let listing: Vec<_> = root.1.iter().collect();
         assert_eq!(
             listing,
@@ -378,7 +375,7 @@ mod test {
         );
 
         let abc = dirtabs.dirent_tables.first().unwrap();
-        assert_eq!(abc.0, PathVec::from("abc"));
+        assert_eq!(*abc.0, ImagePath::from("/abc"));
         let listing: Vec<_> = abc.1.iter().collect();
         assert_eq!(
             listing,
@@ -404,27 +401,27 @@ mod test {
 
         let mut progress_list = Vec::new();
 
-        let res = create_xdvdfs_image(&mut slbfs, &mut slbd, |pi: ProgressInfo<'_>| {
-            progress_list.push(pi.to_owned())
+        let res = create_xdvdfs_image(&mut slbfs, &mut slbd, |pi: ProgressInfo| {
+            progress_list.push(pi)
         });
         assert!(res.is_ok());
 
         assert_eq!(
             progress_list,
             &[
-                OwnedProgressInfo::DiscoveredDirectory(2),
-                OwnedProgressInfo::DiscoveredDirectory(1),
-                OwnedProgressInfo::DiscoveredDirectory(0),
-                OwnedProgressInfo::FileCount(3),
-                OwnedProgressInfo::DirCount(3),
-                OwnedProgressInfo::DirAdded(PathRef::from("/").into(), 33),
-                OwnedProgressInfo::FileAdded(PathRef::from("/a").into(), 34),
-                OwnedProgressInfo::FileAdded(PathRef::from("/b").into(), 35),
-                OwnedProgressInfo::DirAdded(PathRef::from("/a").into(), 34),
-                OwnedProgressInfo::FileAdded(PathRef::from("/a/b").into(), 36),
-                OwnedProgressInfo::DirAdded(PathRef::from("/b").into(), 35),
-                OwnedProgressInfo::FinishedCopyingImageData,
-                OwnedProgressInfo::FinishedPacking,
+                ProgressInfo::DiscoveredDirectory(2),
+                ProgressInfo::DiscoveredDirectory(1),
+                ProgressInfo::DiscoveredDirectory(0),
+                ProgressInfo::FileCount(3),
+                ProgressInfo::DirCount(3),
+                ProgressInfo::DirAdded("/".into(), 33),
+                ProgressInfo::FileAdded("/a".into(), 34),
+                ProgressInfo::FileAdded("/b".into(), 35),
+                ProgressInfo::DirAdded("/a".into(), 34),
+                ProgressInfo::FileAdded("/a/b".into(), 36),
+                ProgressInfo::DirAdded("/b".into(), 35),
+                ProgressInfo::FinishedCopyingImageData,
+                ProgressInfo::FinishedPacking,
             ]
         );
     }
@@ -508,7 +505,7 @@ mod test {
         // "/a/b"
         assert_eq!(
             slbd.get(36),
-            SectorLinearBlockSectorContents::File("/a/b".into())
+            SectorLinearBlockSectorContents::File(&"/a/b".into())
         );
     }
 }
