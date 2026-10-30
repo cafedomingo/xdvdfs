@@ -10,7 +10,7 @@ use crate::{
 };
 
 #[non_exhaustive]
-#[derive(Error, Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Error, Debug, Clone, Eq, PartialEq)]
 pub enum ChecksumError<E> {
     #[error("failed to read xdvdfs filesystem")]
     FilesystemError(#[from] DirectoryTableWalkError<E>),

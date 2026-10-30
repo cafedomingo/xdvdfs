@@ -65,6 +65,8 @@ To unpack an image, run:
 xdvdfs unpack <path to image> [optional output path]
 ```
 
+Unpacking rejects images with file names that could escape the output directory, such as `..` or names containing `/`, `\` or `:`, and can re-run into a folder that holds an earlier unpack, overwriting its files.
+
 #### Other Utilities
 
 `xdvdfs-cli` supports additional utility tools for use with images.

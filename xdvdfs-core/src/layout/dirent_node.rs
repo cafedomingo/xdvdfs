@@ -1,4 +1,5 @@
 use alloc::borrow::Cow;
+use alloc::string::String;
 use encoding_rs::WINDOWS_1252;
 use thiserror::Error;
 
@@ -13,9 +14,13 @@ pub struct DirectoryEntryNode {
     pub offset: u64,
 }
 
-#[derive(Error, Debug, Copy, Clone, Eq, PartialEq)]
-#[error("failed to deserialize file name into utf-8")]
-pub struct NameDeserializationError;
+#[derive(Error, Debug, Clone, Eq, PartialEq)]
+pub enum NameDeserializationError {
+    #[error("failed to deserialize file name into utf-8")]
+    InvalidEncoding,
+    #[error("unsafe file name {0:?}")]
+    UnsafeName(String),
+}
 
 impl DirectoryEntryNode {
     /// Deserializes a DirectoryEntryNode from a buffer
@@ -44,13 +49,19 @@ impl DirectoryEntryNode {
         &self.name[0..name_len]
     }
 
-    /// Returns a UTF-8 encoded representation of the file name
-    /// If the filename cannot be reencoded into UTF-8, returns None
+    /// Returns the file name decoded to UTF-8, or an error if it can't be
+    /// decoded or isn't safe to use as a single path component.
     pub fn name_str(&self) -> Result<Cow<'_, str>, NameDeserializationError> {
-        let name_bytes = self.name_slice();
-        WINDOWS_1252
-            .decode_without_bom_handling_and_without_replacement(name_bytes)
-            .ok_or(NameDeserializationError)
+        let name = WINDOWS_1252
+            .decode_without_bom_handling_and_without_replacement(self.name_slice())
+            .ok_or(NameDeserializationError::InvalidEncoding)?;
+
+        // `:` because on Windows `Path::join("C:x")` discards the base path
+        if matches!(&*name, "" | "." | "..") || name.contains(['/', '\\', ':', '\0']) {
+            return Err(NameDeserializationError::UnsafeName(name.into_owned()));
+        }
+
+        Ok(name)
     }
 }
 
@@ -60,7 +71,7 @@ mod test {
         DirectoryEntryDiskData, DirectoryEntryDiskNode, DirentAttributes, DiskRegion,
     };
 
-    use super::DirectoryEntryNode;
+    use super::{DirectoryEntryNode, NameDeserializationError};
 
     #[test]
     fn test_layout_dirent_node_deserialize_empty_ff_filled() {
@@ -125,5 +136,38 @@ mod test {
 
         let decoded_name = node.name_str();
         assert_eq!(decoded_name, Ok("AŸ".into()));
+    }
+
+    #[test]
+    fn test_name_str_rejects_unsafe_names() {
+        fn node_named(name: &[u8]) -> DirectoryEntryNode {
+            let mut node = DirectoryEntryNode {
+                node: DirectoryEntryDiskNode {
+                    left_entry_offset: 0,
+                    right_entry_offset: 0,
+                    dirent: DirectoryEntryDiskData {
+                        data: DiskRegion { size: 0, sector: 0 },
+                        attributes: DirentAttributes(0),
+                        filename_length: name.len() as u8,
+                    },
+                },
+                name: [0; 256],
+                offset: 0,
+            };
+            node.name[..name.len()].copy_from_slice(name);
+            node
+        }
+
+        for name in ["", ".", "..", "../x", "a/b", "a\\b", "a\0b", "C:x"] {
+            assert!(
+                matches!(
+                    node_named(name.as_bytes()).name_str(),
+                    Err(NameDeserializationError::UnsafeName(_))
+                ),
+                "{name:?}"
+            );
+        }
+        assert_eq!(node_named(b"...").name_str(), Ok("...".into()));
+        assert_eq!(node_named(b"caf\xe9").name_str(), Ok("café".into()));
     }
 }

@@ -1,12 +1,21 @@
 use crate::blockdev::BlockDeviceRead;
 use crate::layout::{cmp_ignore_case_utf8, DirectoryEntryNode, DirectoryEntryTable};
-use crate::read::{DirectoryTableLookupError, DirectoryTableWalkError};
+use crate::read::{DirectoryTableLookupError, DirectoryTableWalkError, TableRanges};
+use alloc::collections::BTreeSet;
 use maybe_async::maybe_async;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum DirentSearchResult {
     Found,
     NextOffset(u64),
+}
+
+/// Converts a child entry's dword offset to a byte offset in the table.
+fn child_offset(dword_offset: u16) -> Option<u64> {
+    match dword_offset {
+        0 | 0xffff => None,
+        offset => Some(4 * u64::from(offset)),
+    }
 }
 
 impl DirectoryEntryTable {
@@ -21,18 +30,14 @@ impl DirectoryEntryTable {
         let cmp = cmp_ignore_case_utf8(name, &dirent_name);
         debugln!("[find_dirent] Comparison result: {:?}", cmp);
 
-        let next_offset = match cmp {
+        let child = match cmp {
             core::cmp::Ordering::Equal => return Ok(DirentSearchResult::Found),
             core::cmp::Ordering::Less => dirent.node.left_entry_offset,
             core::cmp::Ordering::Greater => dirent.node.right_entry_offset,
         };
 
-        if next_offset == 0 || next_offset == 0xff {
-            return Err(DirectoryTableLookupError::DoesNotExist);
-        }
-
-        let next_offset = self.offset(4 * next_offset as u64)?;
-        Ok(DirentSearchResult::NextOffset(next_offset))
+        let child = child_offset(child).ok_or(DirectoryTableLookupError::DoesNotExist)?;
+        Ok(DirentSearchResult::NextOffset(self.offset(child)?))
     }
 
     #[maybe_async]
@@ -46,8 +51,13 @@ impl DirectoryEntryTable {
             return Err(DirectoryTableLookupError::DirectoryEmpty);
         }
 
+        let mut visited = BTreeSet::new();
         let mut offset = self.offset(0)?;
         loop {
+            if !visited.insert(offset) {
+                break Err(DirectoryTableLookupError::Loop);
+            }
+
             let dirent = DirectoryEntryNode::read_from_disk(dev, offset).await?;
             let dirent = dirent.ok_or(DirectoryTableLookupError::DoesNotExist)?;
             traceln!("[find_dirent] Found node: {:?}", dirent.node);
@@ -71,19 +81,17 @@ impl DirectoryEntryTable {
         path: &str,
     ) -> Result<DirectoryEntryNode, DirectoryTableLookupError<BDR::ReadError>> {
         debugln!("[walk_path] Called on {}", path);
-        if path.is_empty() || path == "/" {
+        let path = path.trim_start_matches('/');
+        if path.is_empty() {
             return Err(DirectoryTableLookupError::NoDirent);
         }
 
         let mut dirent_tab = *self;
-        let mut path_iter = path
-            .trim_start_matches('/')
-            .split_terminator('/')
-            .peekable();
+        let mut path_iter = path.split_terminator('/').peekable();
 
         while let Some(segment) = path_iter.next() {
             let dirent = dirent_tab.find_dirent(dev, segment).await?;
-            debugln!("[walk_path] Found dirent: {}", dirent.name_str()?);
+            debugln!("[walk_path] Found dirent: {:?}", dirent.name_str());
             traceln!("[walk_path] Node: {:?}", dirent.node);
             let dirent_data = &dirent.node.dirent;
 
@@ -114,8 +122,13 @@ impl DirectoryEntryTable {
             return Ok(dirents);
         }
 
+        let mut visited = BTreeSet::new();
         let mut stack = vec![0];
         while let Some(top) = stack.pop() {
+            if !visited.insert(top) {
+                return Err(DirectoryTableWalkError::Loop);
+            }
+
             let offset = self.offset(top)?;
             let dirent = DirectoryEntryNode::read_from_disk(dev, offset).await?;
 
@@ -126,15 +139,8 @@ impl DirectoryEntryTable {
                 );
                 traceln!("[walk_dirent_tree] Node: {:?} at offset {}", dirent, top);
 
-                let right_child = dirent.node.right_entry_offset;
-                if right_child != 0 && right_child != 0xffff {
-                    stack.push(4 * dirent.node.right_entry_offset as u64);
-                }
-
-                let left_child = dirent.node.left_entry_offset;
-                if left_child != 0 && left_child != 0xffff {
-                    stack.push(4 * dirent.node.left_entry_offset as u64);
-                }
+                stack.extend(child_offset(dirent.node.right_entry_offset));
+                stack.extend(child_offset(dirent.node.left_entry_offset));
 
                 dirents.push(dirent);
             }
@@ -157,10 +163,16 @@ impl DirectoryEntryTable {
 
         let mut dirents = vec![];
 
+        // Only tables with entries count: empty ones may share an all-padding sector
+        let mut tables_read = TableRanges::default();
         let mut stack = vec![(String::from(""), *self)];
         while let Some((parent, tree)) = stack.pop() {
             debugln!("[file_tree] Descending through {}", parent);
             let children = tree.walk_dirent_tree(dev).await?;
+            if !children.is_empty() && tables_read.overlapping_or_insert(&tree, || ()).is_some() {
+                return Err(DirectoryTableWalkError::Loop);
+            }
+
             for child in children {
                 if let Some(dirent_table) = child.node.dirent.dirent_table() {
                     let child_name = child.name_str()?;
@@ -184,8 +196,24 @@ mod test {
             DirectoryEntryDiskData, DirectoryEntryDiskNode, DirectoryEntryNode,
             DirectoryEntryTable, DirentAttributes, DiskRegion,
         },
-        read::{dirent_table::DirentSearchResult, DirectoryTableLookupError},
+        read::{
+            dirent_table::DirentSearchResult, DirectoryTableLookupError, DirectoryTableWalkError,
+        },
     };
+
+    #[rustfmt::skip]
+    const SELF_LOOP: [u8; 32] = [
+        // Offset 0x00 (0)
+        0, 0, 4, 0, // Right child -> B
+        1, 0, 0, 0,
+        2, 0, 0, 0,
+        0, 1, b'A', 0xff,
+        // Offset 0x10 (4)
+        0, 0, 4, 0, // Right child -> B itself
+        3, 0, 0, 0,
+        4, 0, 0, 0,
+        0, 1, b'B', 0xff,
+    ];
 
     pub fn name_bytes_from(name: &str) -> [u8; 256] {
         assert!(name.len() <= 256);
@@ -346,7 +374,7 @@ mod test {
 
         let dirent = DirectoryEntryNode {
             node: DirectoryEntryDiskNode {
-                left_entry_offset: 0xff,
+                left_entry_offset: 0xffff,
                 right_entry_offset: 514,
                 dirent: DirectoryEntryDiskData {
                     data: DiskRegion { sector: 1, size: 2 },
@@ -374,7 +402,7 @@ mod test {
         let dirent = DirectoryEntryNode {
             node: DirectoryEntryDiskNode {
                 left_entry_offset: 257,
-                right_entry_offset: 0xff,
+                right_entry_offset: 0xffff,
                 dirent: DirectoryEntryDiskData {
                     data: DiskRegion { sector: 1, size: 2 },
                     attributes: DirentAttributes(255),
@@ -484,6 +512,205 @@ mod test {
 
         let res = block_on(table.walk_path(dev.as_mut_slice(), "/"));
         assert_eq!(res, Err(DirectoryTableLookupError::NoDirent));
+    }
+
+    #[test]
+    fn test_find_dirent_child_at_dword_offset_255() {
+        #[rustfmt::skip]
+        let a = [
+            0, 0, 255, 0, // Right child -> B
+            1, 0, 0, 0,
+            2, 0, 0, 0,
+            0, 1, b'A',
+        ];
+        #[rustfmt::skip]
+        let b = [
+            0, 0, 0, 0,
+            3, 0, 0, 0,
+            4, 0, 0, 0,
+            0, 1, b'B',
+        ];
+        let mut dev = [0xffu8; 2048];
+        dev[..a.len()].copy_from_slice(&a);
+        dev[1020..][..b.len()].copy_from_slice(&b);
+        let table = DirectoryEntryTable {
+            region: DiskRegion {
+                sector: 0,
+                size: 2048,
+            },
+        };
+
+        let res = block_on(table.walk_path(dev.as_mut_slice(), "/B"));
+        assert_eq!(res.map(|dirent| dirent.offset), Ok(1020));
+    }
+
+    #[test]
+    fn test_find_dirent_loop() {
+        let mut dev = SELF_LOOP;
+        let table = DirectoryEntryTable {
+            region: DiskRegion {
+                sector: 0,
+                size: 2048,
+            },
+        };
+
+        let res = block_on(table.walk_path(dev.as_mut_slice(), "/C"));
+        assert_eq!(res, Err(DirectoryTableLookupError::Loop));
+    }
+
+    #[test]
+    fn test_walk_path_all_slashes_is_root() {
+        let mut dev = [];
+        let table = DirectoryEntryTable {
+            region: DiskRegion {
+                sector: 0,
+                size: 2048,
+            },
+        };
+
+        let res = block_on(table.walk_path(dev.as_mut_slice(), "//"));
+        assert_eq!(res, Err(DirectoryTableLookupError::NoDirent));
+    }
+
+    #[test]
+    fn test_walk_dirent_tree_self_loop() {
+        let mut dev = SELF_LOOP;
+        let table = DirectoryEntryTable {
+            region: DiskRegion {
+                sector: 0,
+                size: 2048,
+            },
+        };
+
+        let res = block_on(table.walk_dirent_tree(dev.as_mut_slice()));
+        assert_eq!(res, Err(DirectoryTableWalkError::Loop));
+    }
+
+    #[test]
+    fn test_file_tree_directory_loop() {
+        let directory = DirentAttributes(0).with_directory(true).0;
+        #[rustfmt::skip]
+        let mut dev = [
+            0, 0, 0, 0,
+            0, 0, 0, 0, // Table at sector 0, the root's own
+            0, 8, 0, 0,
+            directory, 1, b'D', 0xff,
+        ];
+        let table = DirectoryEntryTable {
+            region: DiskRegion {
+                sector: 0,
+                size: 2048,
+            },
+        };
+
+        let res = block_on(table.file_tree(dev.as_mut_slice()));
+        assert_eq!(res, Err(DirectoryTableWalkError::Loop));
+    }
+
+    #[test]
+    fn test_file_tree_shared_table() {
+        let directory = DirentAttributes(0).with_directory(true).0;
+        #[rustfmt::skip]
+        let dirs_into = |sector: u8| [
+            0, 0, 4, 0, // Right child -> b
+            sector, 0, 0, 0,
+            0, 8, 0, 0,
+            directory, 1, b'a', 0xff,
+            0, 0, 0, 0,
+            sector, 0, 0, 0,
+            0, 8, 0, 0,
+            directory, 1, b'b', 0xff,
+        ];
+        #[rustfmt::skip]
+        let file = [
+            0, 0, 0, 0,
+            3, 0, 0, 0,
+            1, 0, 0, 0,
+            0, 1, b'f', 0xff,
+        ];
+        let mut dev = [0xffu8; 3 * 2048];
+        dev[..32].copy_from_slice(&dirs_into(1));
+        dev[2048..][..32].copy_from_slice(&dirs_into(2));
+        dev[2 * 2048..][..file.len()].copy_from_slice(&file);
+        let table = DirectoryEntryTable {
+            region: DiskRegion {
+                sector: 0,
+                size: 2048,
+            },
+        };
+
+        let res = block_on(table.file_tree(dev.as_mut_slice()));
+        assert_eq!(res, Err(DirectoryTableWalkError::Loop));
+    }
+
+    #[test]
+    fn test_file_tree_overlapping_tables() {
+        // Tables at sectors 1 to 4, each running to the end of the image
+        const SECTORS: u32 = 5;
+        #[rustfmt::skip]
+        let file = [
+            0, 0, 0, 0,
+            0, 0, 0, 0,
+            0, 0, 0, 0,
+            0, 1, b'f', 0xff,
+        ];
+        let mut dev = [0xffu8; SECTORS as usize * 2048];
+        for (index, name) in (b'a'..=b'd').enumerate() {
+            let sector = index as u32 + 1;
+            let right_entry_offset = if name < b'd' { 4 * sector as u16 } else { 0 };
+            let dir = DirectoryEntryDiskNode {
+                left_entry_offset: 0,
+                right_entry_offset,
+                dirent: DirectoryEntryDiskData {
+                    data: DiskRegion {
+                        sector,
+                        size: (SECTORS - sector) * 2048,
+                    },
+                    attributes: DirentAttributes(0).with_directory(true),
+                    filename_length: 1,
+                },
+            };
+            dir.serialize_into(&mut dev[16 * index..])
+                .expect("Serializing dirent should succeed");
+            dev[16 * index + 0xe] = name;
+            dev[sector as usize * 2048..][..file.len()].copy_from_slice(&file);
+        }
+        let table = DirectoryEntryTable {
+            region: DiskRegion {
+                sector: 0,
+                size: 2048,
+            },
+        };
+
+        let res = block_on(table.file_tree(dev.as_mut_slice()));
+        assert_eq!(res, Err(DirectoryTableWalkError::Loop));
+    }
+
+    #[test]
+    fn test_file_tree_empty_tables_share_sector() {
+        let directory = DirentAttributes(0).with_directory(true).0;
+        #[rustfmt::skip]
+        let root = [
+            0, 0, 4, 0, // Right child -> b
+            1, 0, 0, 0, // Table at sector 1, all padding
+            0, 8, 0, 0,
+            directory, 1, b'a', 0xff,
+            0, 0, 0, 0,
+            1, 0, 0, 0,
+            0, 8, 0, 0,
+            directory, 1, b'b', 0xff,
+        ];
+        let mut dev = [0xffu8; 2 * 2048];
+        dev[..root.len()].copy_from_slice(&root);
+        let table = DirectoryEntryTable {
+            region: DiskRegion {
+                sector: 0,
+                size: 2048,
+            },
+        };
+
+        let res = block_on(table.file_tree(dev.as_mut_slice())).expect("File tree should succeed");
+        assert_eq!(res.len(), 2);
     }
 
     #[test]

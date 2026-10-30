@@ -1,3 +1,4 @@
+use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 
 use thiserror::Error;
@@ -9,12 +10,12 @@ use maybe_async::maybe_async;
 
 use crate::blockdev::{BlockDeviceRead, BlockDeviceWrite};
 use crate::layout::DirectoryEntryNode;
-use crate::read::DirectoryTableLookupError;
+use crate::read::{DirectoryTableLookupError, TableRanges};
 
 use super::FilesystemCopier;
 use super::FilesystemHierarchy;
-use super::PathRef;
 use super::{FileEntry, FileType, PathPrefixTree};
+use super::{PathRef, PathVec};
 
 mod copier;
 pub use copier::*;
@@ -44,6 +45,8 @@ where
     dev: D,
     volume: crate::layout::VolumeDescriptor,
     dirent_cache: PathPrefixTree<DirectoryEntryNode>,
+    /// The path that first read each table with entries
+    table_paths: TableRanges<PathVec>,
     copier: Copier,
 
     w_type: core::marker::PhantomData<W>,
@@ -64,6 +67,7 @@ where
                 dev,
                 volume,
                 dirent_cache: PathPrefixTree::default(),
+                table_paths: TableRanges::default(),
                 copier: Copier::default(),
                 w_type: core::marker::PhantomData,
             })
@@ -121,11 +125,28 @@ where
             });
         }
 
+        // `dir_tree` would queue a repeated directory name twice, doubling the walk per level
+        let mut names = BTreeSet::new();
+        if let Some(entry) = entries.iter().find(|entry| !names.insert(&entry.name)) {
+            return Err(DirectoryTableLookupError::DuplicateName(entry.name.clone()));
+        }
+
+        // Only tables with entries count: empty ones may share an all-padding sector
+        if !entries.is_empty() {
+            let first_path = self
+                .table_paths
+                .overlapping_or_insert(&dirtab, || dir.into());
+            if first_path.is_some_and(|first_path| dir != *first_path) {
+                return Err(DirectoryTableLookupError::Loop);
+            }
+        }
+
         Ok(entries)
     }
 
     async fn clear_cache(&mut self) -> Result<(), Self::Error> {
         self.dirent_cache = PathPrefixTree::default();
+        self.table_paths = TableRanges::default();
 
         Ok(())
     }
@@ -180,20 +201,157 @@ where
 
 #[cfg(test)]
 mod test {
+    use alloc::vec::Vec;
     use futures::executor::block_on;
+    use std::io::Cursor;
 
     use crate::{
         blockdev::NullBlockDevice,
+        layout::{
+            DirectoryEntryDiskData, DirectoryEntryDiskNode, DirectoryEntryTable, DirentAttributes,
+            DiskRegion, VolumeDescriptor, SECTOR_SIZE, SECTOR_SIZE_USZ,
+        },
+        read::DirectoryTableLookupError,
         write::{
             fs::{
-                FileEntry, FileType, FilesystemCopier, FilesystemHierarchy, MemoryFilesystem,
-                SectorLinearBlockDevice, SectorLinearBlockFilesystem, SectorLinearImage,
+                dir_tree, FileEntry, FileType, FilesystemCopier, FilesystemHierarchy,
+                MemoryFilesystem, SectorLinearBlockDevice, SectorLinearBlockFilesystem,
+                SectorLinearImage,
             },
             img::{create_xdvdfs_image, NoOpProgressVisitor},
         },
     };
 
     use super::{DefaultCopier, XDVDFSFilesystem};
+
+    const VOLUME_SECTOR: u32 = 32;
+    const ROOT_SECTOR: u32 = VOLUME_SECTOR + 1;
+
+    fn sector_at(sector: u32) -> usize {
+        sector as usize * SECTOR_SIZE_USZ
+    }
+
+    /// An 0xff-filled image of `sectors` sectors with a one-sector root table.
+    fn blank_image(sectors: u32) -> Vec<u8> {
+        let root = DirectoryEntryTable::new(SECTOR_SIZE, ROOT_SECTOR);
+        let mut img = alloc::vec![0xff; sector_at(sectors)];
+        let volume = VolumeDescriptor::new(root).serialize().unwrap();
+        img[sector_at(VOLUME_SECTOR)..][..volume.len()].copy_from_slice(&volume);
+        img
+    }
+
+    /// Writes a directory entry at byte `at` and returns where the next one goes.
+    fn put_dir(img: &mut [u8], at: usize, name: &str, data: DiskRegion) -> usize {
+        let node = DirectoryEntryDiskNode {
+            left_entry_offset: 0,
+            right_entry_offset: 0,
+            dirent: DirectoryEntryDiskData {
+                data,
+                attributes: DirentAttributes(0).with_directory(true),
+                filename_length: name.len() as u8,
+            },
+        };
+        node.serialize_into(&mut img[at..]).unwrap();
+        img[at + 0xe..][..name.len()].copy_from_slice(name.as_bytes());
+        at + (0xe + name.len()).next_multiple_of(4)
+    }
+
+    /// An image whose table `i` sits at sector `ROOT_SECTOR + i`, root first.
+    /// Each entry is a directory name and the index of the table it points at.
+    fn image_with_tables(tables: &[&[(&str, u32)]]) -> Cursor<Vec<u8>> {
+        let mut img = blank_image(ROOT_SECTOR + tables.len() as u32);
+        for (index, entries) in tables.iter().enumerate() {
+            let mut at = sector_at(ROOT_SECTOR + index as u32);
+            for (name, table) in entries.iter() {
+                let data = DiskRegion {
+                    sector: ROOT_SECTOR + table,
+                    size: SECTOR_SIZE,
+                };
+                at = put_dir(&mut img, at, name, data);
+            }
+        }
+
+        Cursor::new(img)
+    }
+
+    fn open(img: Cursor<Vec<u8>>) -> XDVDFSFilesystem<Cursor<Vec<u8>>, NullBlockDevice> {
+        block_on(XDVDFSFilesystem::new(img)).expect("xdvdfs filesystem init should succeed")
+    }
+
+    #[test]
+    fn test_read_dir_grandchild_loop() {
+        let mut fs = open(image_with_tables(&[&[("a", 1)], &[("b", 1)]]));
+
+        block_on(fs.read_dir("/".into())).expect("Root read should succeed");
+        block_on(fs.read_dir("/a".into())).expect("/a read should succeed");
+        block_on(fs.read_dir("/a".into())).expect("/a reread should succeed");
+        let res = block_on(fs.read_dir("/a/b".into()));
+        assert!(
+            matches!(res, Err(DirectoryTableLookupError::Loop)),
+            "{res:?}"
+        );
+    }
+
+    #[test]
+    fn test_read_dir_shared_table() {
+        let mut fs = open(image_with_tables(&[
+            &[("a", 1), ("b", 1)],
+            &[("c", 2)],
+            &[],
+        ]));
+
+        block_on(fs.read_dir("/".into())).expect("Root read should succeed");
+        block_on(fs.read_dir("/a".into())).expect("/a read should succeed");
+        let res = block_on(fs.read_dir("/b".into()));
+        assert!(
+            matches!(res, Err(DirectoryTableLookupError::Loop)),
+            "{res:?}"
+        );
+    }
+
+    #[test]
+    fn test_read_dir_overlapping_tables() {
+        let end = ROOT_SECTOR + 5;
+        let mut img = blank_image(end);
+        let mut at = sector_at(ROOT_SECTOR);
+        for (name, sector) in ["a", "b", "c", "d"].into_iter().zip(ROOT_SECTOR + 1..) {
+            let size = (end - sector) * SECTOR_SIZE;
+            at = put_dir(&mut img, at, name, DiskRegion { sector, size });
+
+            // Distinct names, since each table's scan runs over the later sectors too
+            let leaf = DiskRegion { sector: 0, size: 0 };
+            put_dir(
+                &mut img,
+                sector_at(sector),
+                &alloc::format!("x{sector}"),
+                leaf,
+            );
+        }
+        let mut fs = open(Cursor::new(img));
+
+        block_on(fs.read_dir("/".into())).expect("Root read should succeed");
+        block_on(fs.read_dir("/a".into())).expect("/a read should succeed");
+        let res = block_on(fs.read_dir("/b".into()));
+        assert!(
+            matches!(res, Err(DirectoryTableLookupError::Loop)),
+            "{res:?}"
+        );
+    }
+
+    #[test]
+    fn test_read_dir_duplicate_name() {
+        let doubled: Vec<[(&str, u32); 2]> = (1..=12).map(|next| [("a", next); 2]).collect();
+        let mut tables: Vec<&[(&str, u32)]> = doubled.iter().map(|table| &table[..]).collect();
+        tables.push(&[]);
+        let mut fs = open(image_with_tables(&tables));
+
+        let res = block_on(dir_tree(&mut fs, &mut |_| {}));
+        assert!(
+            matches!(&res, Err(DirectoryTableLookupError::DuplicateName(name)) if name == "a"),
+            "{:?}",
+            res.map(|tree| tree.len())
+        );
+    }
 
     #[test]
     fn test_write_xdvdfs_invalid_volume() {

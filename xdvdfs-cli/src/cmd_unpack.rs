@@ -1,4 +1,5 @@
 use crate::img::open_image_raw;
+use anyhow::{anyhow, ensure};
 use clap::Args;
 use maybe_async::maybe_async;
 use std::{
@@ -7,7 +8,43 @@ use std::{
     path::{Path, PathBuf},
     str::FromStr,
 };
-use xdvdfs::{blockdev::OffsetWrapper, layout::DirectoryEntryTable};
+use xdvdfs::{
+    blockdev::OffsetWrapper,
+    layout::{DirectoryEntryDiskData, DirectoryEntryTable},
+};
+
+/// Chunks this large keep unpack from being syscall-bound, which it is with
+/// `io::copy`'s 8 KiB chunks.
+const EXTRACT_CHUNK_LEN: u64 = 1 << 20;
+
+fn extract_file(
+    img: &mut OffsetWrapper<BufReader<File>>,
+    dirent: &DirectoryEntryDiskData,
+    path: &Path,
+) -> anyhow::Result<()> {
+    let mut file = File::create(path)?;
+    let size = u64::from(dirent.data.size);
+    if size == 0 {
+        return Ok(());
+    }
+
+    dirent.seek_to(img)?;
+    let mut data = img.get_mut().take(size);
+    let mut chunk = vec![0; size.min(EXTRACT_CHUNK_LEN) as usize];
+    let mut copied = 0;
+    while copied < size {
+        let read = data.read(&mut chunk)?;
+        ensure!(
+            read > 0,
+            "{} is truncated: the image holds {copied} of its {size} bytes",
+            path.display()
+        );
+        file.write_all(&chunk[..read])?;
+        copied += read as u64;
+    }
+
+    Ok(())
+}
 
 #[maybe_async]
 async fn copyout_directory(
@@ -31,39 +68,10 @@ async fn copyout_directory(
         );
 
         std::fs::create_dir_all(dirname)?;
-        if dirent.node.dirent.is_directory() {
-            std::fs::create_dir(file_path)?;
-            continue;
-        }
-
-        if dirent.node.dirent.filename_length == 0 {
-            eprintln!("WARNING: {file_path:?} has an empty file name, skipping");
-            continue;
-        }
-
-        let mut file = File::options()
-            .write(true)
-            .truncate(true)
-            .create(true)
-            .open(file_path)?;
-
-        if dirent.node.dirent.is_empty() {
-            continue;
-        }
-
-        dirent.node.dirent.seek_to(img)?;
-        let data = img.get_ref().get_ref().try_clone();
-        match data {
-            Ok(data) => {
-                let data = data.take(dirent.node.dirent.data.size as u64);
-                let mut data = std::io::BufReader::new(data);
-                std::io::copy(&mut data, &mut file)?;
-            }
-            Err(err) => {
-                eprintln!("Error in fast path, falling back to slow path: {err:?}");
-                let data = dirent.node.dirent.read_data_all(img).await?;
-                file.write_all(&data)?;
-            }
+        if is_dir {
+            std::fs::create_dir_all(file_path)?;
+        } else {
+            extract_file(img, &dirent.node.dirent, &file_path)?;
         }
     }
 
@@ -85,8 +93,11 @@ pub async fn cmd_unpack(args: &UnpackArgs) -> Result<(), anyhow::Error> {
     let target_dir = match &args.path {
         Some(path) => PathBuf::from_str(path).unwrap(),
         None => {
-            let os_path = PathBuf::from_str(&args.image_path).unwrap();
-            PathBuf::from(os_path.file_name().unwrap()).with_extension("")
+            let image_path = Path::new(&args.image_path);
+            let file_name = image_path.file_name().ok_or_else(|| {
+                anyhow!("{image_path:?} has no file name; pass an output directory")
+            })?;
+            PathBuf::from(file_name).with_extension("")
         }
     };
 
@@ -127,30 +138,5 @@ pub async fn cmd_copyout(args: &CopyOutArgs) -> Result<(), anyhow::Error> {
         return copyout_directory(&mut img, dest_path, &table).await;
     }
 
-    let mut file = File::options()
-        .write(true)
-        .truncate(true)
-        .create(true)
-        .open(&args.dest_path)?;
-
-    if dirent.node.dirent.is_empty() {
-        return Ok(());
-    }
-
-    dirent.node.dirent.seek_to(&mut img)?;
-    let data = img.get_ref().get_ref().try_clone();
-    match data {
-        Ok(data) => {
-            let data = data.take(dirent.node.dirent.data.size as u64);
-            let mut data = std::io::BufReader::new(data);
-            std::io::copy(&mut data, &mut file)?;
-        }
-        Err(err) => {
-            eprintln!("Error in fast path, falling back to slow path: {err:?}");
-            let data = dirent.node.dirent.read_data_all(&mut img).await?;
-            file.write_all(&data)?;
-        }
-    }
-
-    Ok(())
+    extract_file(&mut img, &dirent.node.dirent, dest_path)
 }
