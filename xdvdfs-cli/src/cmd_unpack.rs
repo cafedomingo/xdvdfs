@@ -12,8 +12,10 @@ use xdvdfs::{
     blockdev::OffsetWrapper,
     layout::{DirectoryEntryDiskData, DirectoryEntryTable},
     read::DATA_CHUNK_LEN,
-    write::fs::ImagePath,
+    write::fs::{ImagePath, is_system_update_dir},
 };
+
+use crate::cmd_pack::SKIP_SYSTEM_UPDATE_HELP;
 
 fn extract_file(
     img: &mut OffsetWrapper<BufReader<File>>,
@@ -44,12 +46,14 @@ fn extract_file(
     Ok(())
 }
 
-/// Copies out `dirtab`, the table of `dir` in the image
+/// Copies out `dirtab`, the table of `dir` in the image, except for any
+/// `$SystemUpdate` folder if `skip_system_update`
 fn copyout_directory(
     img: &mut OffsetWrapper<BufReader<File>>,
     dest_dir: &Path,
     dir: &ImagePath,
     dirtab: &DirectoryEntryTable,
+    skip_system_update: bool,
 ) -> anyhow::Result<()> {
     let tree = dirtab.file_tree(img).map_err(under_dir(dir))?;
 
@@ -58,6 +62,12 @@ fn copyout_directory(
         let file_name = dirent.name_str()?;
         let file_path = dirname.join(&*file_name);
         let is_dir = dirent.node.dirent.is_directory();
+        if skip_system_update
+            && (dir.components().any(is_system_update_dir)
+                || (is_dir && is_system_update_dir(&file_name)))
+        {
+            continue;
+        }
 
         print_progress(format_args!(
             "Extracting {} {}\n",
@@ -84,6 +94,9 @@ pub struct UnpackArgs {
 
     #[arg(help = "Output directory")]
     path: Option<String>,
+
+    #[arg(long, help = SKIP_SYSTEM_UPDATE_HELP)]
+    skip_system_update: bool,
 }
 
 pub fn cmd_unpack(args: &UnpackArgs) -> Result<(), anyhow::Error> {
@@ -106,6 +119,7 @@ pub fn cmd_unpack(args: &UnpackArgs) -> Result<(), anyhow::Error> {
         &target_dir,
         &ImagePath::root(),
         &volume.root_table,
+        args.skip_system_update,
     )
 }
 
@@ -129,12 +143,12 @@ pub fn cmd_copyout(args: &CopyOutArgs) -> Result<(), anyhow::Error> {
     let volume = xdvdfs::read::read_volume(&mut img)?;
     let src_path = ImagePath::from(args.src_path.as_str());
     if src_path.is_root() {
-        return copyout_directory(&mut img, dest_path, &src_path, &volume.root_table);
+        return copyout_directory(&mut img, dest_path, &src_path, &volume.root_table, false);
     }
 
     let dirent = volume.root_table.walk_path(&mut img, &src_path)?;
     if let Some(table) = dirent.node.dirent.dirent_table() {
-        return copyout_directory(&mut img, dest_path, &src_path, &table);
+        return copyout_directory(&mut img, dest_path, &src_path, &table, false);
     }
 
     extract_file(&mut img, &dirent.node.dirent, dest_path)

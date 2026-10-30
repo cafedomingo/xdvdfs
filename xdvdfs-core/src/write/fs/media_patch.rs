@@ -6,9 +6,11 @@ use crate::xbe::patch_media_check;
 
 const XBE_EXTENSION: &str = "xbe";
 
-/// A source whose `.xbe` files read with their media check patched
+/// A source whose `.xbe` files read with their media check patched if `patch`,
+/// else the source itself
 pub struct MediaPatchFilesystem<F> {
     inner: F,
+    patch: bool,
     /// The length of each `.xbe` that `read_dir` listed, which a ranged copy doesn't give
     xbe_lens: BTreeMap<ImagePath, u64>,
     /// Compression reads a file in ranges, which can split a media check, so
@@ -17,9 +19,10 @@ pub struct MediaPatchFilesystem<F> {
 }
 
 impl<F> MediaPatchFilesystem<F> {
-    pub fn new(inner: F) -> Self {
+    pub fn new(inner: F, patch: bool) -> Self {
         Self {
             inner,
+            patch,
             xbe_lens: BTreeMap::new(),
             cached: None,
         }
@@ -37,9 +40,11 @@ fn is_xbe(entry: &FileEntry) -> bool {
 impl<F: FilesystemHierarchy> FilesystemHierarchy for MediaPatchFilesystem<F> {
     fn read_dir(&mut self, dir: &ImagePath) -> crate::Result<Vec<FileEntry>> {
         let entries = self.inner.read_dir(dir)?;
-        let xbes = entries.iter().filter(|entry| is_xbe(entry));
-        self.xbe_lens
-            .extend(xbes.map(|entry| (dir.join(&entry.name), entry.len)));
+        if self.patch {
+            let xbes = entries.iter().filter(|entry| is_xbe(entry));
+            self.xbe_lens
+                .extend(xbes.map(|entry| (dir.join(&entry.name), entry.len)));
+        }
         Ok(entries)
     }
 }
@@ -98,7 +103,7 @@ mod test {
         xbe[at..][..MEDIA_CHECK.len()].copy_from_slice(&MEDIA_CHECK);
         let mut memfs = MemoryFilesystem::default();
         memfs.create("/default.xbe", &xbe);
-        let mut fs = MediaPatchFilesystem::new(memfs);
+        let mut fs = MediaPatchFilesystem::new(memfs, true);
         fs.read_dir(&ImagePath::root()).unwrap();
 
         let path = ImagePath::from("/default.xbe");
@@ -124,7 +129,7 @@ mod test {
     fn test_media_patch_empty_xbe() {
         let mut memfs = MemoryFilesystem::default();
         memfs.touch("/default.xbe");
-        let mut fs = MediaPatchFilesystem::new(memfs);
+        let mut fs = MediaPatchFilesystem::new(memfs, true);
         fs.read_dir(&ImagePath::root()).unwrap();
 
         let copied = fs.copy_file_in(&"/default.xbe".into(), &mut [], 0, 0, 0);
