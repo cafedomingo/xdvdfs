@@ -18,6 +18,7 @@ use xdvdfs::write::{
 
 use crate::cmd_pack::default_image_path;
 use crate::img::{absolute_path, open_image_raw};
+use crate::progress::print_progress;
 use crate::split::{FATX_SPLIT_SIZE, SplitOutput};
 
 #[derive(Args)]
@@ -61,12 +62,12 @@ fn write_parts(
         Cow::Borrowed("")
     };
     let progress = |pi: ProgressInfo| match pi {
-        ProgressInfo::DirAdded(path, sector) => {
-            println!("Added dir: {source_prefix}{path} at sector {sector}");
-        }
-        ProgressInfo::FileAdded(path, sector) => {
-            println!("Added file: {source_prefix}{path} at sector {sector}");
-        }
+        ProgressInfo::DirAdded(path, sector) => print_progress(format_args!(
+            "Added dir: {source_prefix}{path} at sector {sector}\n"
+        )),
+        ProgressInfo::FileAdded(path, sector) => print_progress(format_args!(
+            "Added file: {source_prefix}{path} at sector {sector}\n"
+        )),
         _ => {}
     };
 
@@ -104,9 +105,9 @@ where
         FATX_SPLIT_SIZE,
         &mut first,
         || output.create_part(2).map_err(io::Error::other),
-        |done, total| print!("\rCompressing sectors ({done}/{total})"),
+        |done, total| print_progress(format_args!("\rCompressing sectors ({done}/{total})")),
     )?;
-    println!();
+    print_progress(format_args!("\n"));
 
     Ok([first].into_iter().chain(second).collect())
 }

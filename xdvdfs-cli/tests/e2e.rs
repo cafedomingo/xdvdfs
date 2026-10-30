@@ -2,7 +2,9 @@ mod common;
 
 use std::ffi::OsStr;
 use std::fs::{self, File};
+use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use common::{
     assert_error, assert_success, assert_trees_equal, place_at_offset, write_tree, xdvdfs,
@@ -23,6 +25,11 @@ const SECTOR_LEN: usize = 2048;
 const MAX_DIRENT_OFFSET: usize = 65536;
 const LOOKUP_FILES: usize = 300;
 const REPACK_FILES: usize = 20;
+const PIPE_DIRS: usize = 8;
+const PIPE_FILES_PER_DIR: usize = 100;
+const PIPE_NAME_LEN: usize = 200;
+/// More than a pipe buffer holds, so `tree` is still writing when the reader closes
+const PIPE_FILL_LEN: usize = 256 * 1024;
 #[cfg(unix)]
 const OVERSIZED_FILE_LEN: u64 = (1 << 32) + 1;
 
@@ -97,6 +104,12 @@ fn pack_error(src: &Path) -> String {
         assert!(!path.exists(), "{} was left behind", path.display());
     }
     stderr
+}
+
+fn tree(img: &Path) -> String {
+    let out = xdvdfs(&["tree".as_ref(), img.as_ref()]);
+    assert_success(&out);
+    String::from_utf8(out.stdout).unwrap()
 }
 
 fn checksum(img: &Path) -> String {
@@ -860,4 +873,114 @@ fn pack_through_output_symlink() {
         .filter(|name| name.to_string_lossy().ends_with(".partial"))
         .collect();
     assert!(left.is_empty(), "{left:?} were left behind");
+}
+
+#[test]
+fn pack_skips_ds_store() {
+    let work = tempdir().unwrap();
+    let src = work.path().join("src");
+    let img = work.path().join("img.xiso");
+    write_tree(
+        &src,
+        &[
+            (".DS_Store", b"x"),
+            ("f", b"f"),
+            ("sub/.DS_Store", b"x"),
+            ("sub/g", b"g"),
+        ],
+        &[],
+    );
+    pack(&src, &img);
+    compress(&src, &work.path().join("out.cso"));
+
+    for listing in [tree(&img), tree(&work.path().join("out.1.cso"))] {
+        assert!(!listing.contains(".DS_Store"), "tree printed:\n{listing}");
+        assert!(
+            listing.contains("2 files, 2 bytes"),
+            "tree printed:\n{listing}"
+        );
+    }
+}
+
+#[test]
+fn pack_missing_output_dir_names_path() {
+    let work = tempdir().unwrap();
+    let src = work.path().join("src");
+    let out = work.path().join("missing").join("out.iso");
+    write_tree(&src, &[("f", b"data")], &[]);
+
+    let stderr = assert_error(&xdvdfs(&["pack".as_ref(), src.as_ref(), out.as_ref()]));
+    assert!(
+        stderr.contains(&out.display().to_string()),
+        "pack printed:\n{stderr}"
+    );
+    assert_eq!(names_in(work.path()), ["src"]);
+}
+
+#[test]
+fn compress_missing_output_dir_names_path() {
+    let work = tempdir().unwrap();
+    let src = work.path().join("src");
+    let missing = work.path().join("missing");
+    write_tree(&src, &[("f", b"data")], &[]);
+
+    let stderr = assert_error(&xdvdfs(&[
+        "compress".as_ref(),
+        src.as_ref(),
+        missing.join("out.cso").as_ref(),
+    ]));
+    let part = missing.join("out.1.cso");
+    assert!(
+        stderr.contains(&part.display().to_string()),
+        "compress printed:\n{stderr}"
+    );
+    assert_eq!(names_in(work.path()), ["src"]);
+}
+
+#[test]
+fn tree_into_closed_pipe_exits_zero() {
+    let work = tempdir().unwrap();
+    let src = work.path().join("src");
+    let img = work.path().join("img.xiso");
+    for dir in 0..PIPE_DIRS {
+        let dir = src.join(format!("{dir:0PIPE_NAME_LEN$}"));
+        fs::create_dir_all(&dir).unwrap();
+        for file in 0..PIPE_FILES_PER_DIR {
+            File::create(dir.join(format!("{file:0PIPE_NAME_LEN$}"))).unwrap();
+        }
+    }
+    pack(&src, &img);
+    assert!(tree(&img).len() > PIPE_FILL_LEN);
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_xdvdfs"))
+        .arg("tree")
+        .arg(&img)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    let mut first_line = String::new();
+    reader.read_line(&mut first_line).unwrap();
+    assert!(!first_line.is_empty());
+    drop(reader);
+
+    let out = child.wait_with_output().unwrap();
+    assert_success(&out);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.is_empty(), "tree printed:\n{stderr}");
+}
+
+#[test]
+fn error_into_closed_stderr_exits_one() {
+    let (reader, writer) = io::pipe().unwrap();
+    drop(reader);
+
+    let status = Command::new(env!("CARGO_BIN_EXE_xdvdfs"))
+        .arg("tree")
+        .arg(tempdir().unwrap().path().join("missing.xiso"))
+        .stderr(writer)
+        .status()
+        .unwrap();
+    assert_eq!(status.code(), Some(1));
 }

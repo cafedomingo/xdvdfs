@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 
 use super::{FileEntry, FileType, FilesystemCopier, FilesystemHierarchy, ImagePath};
 
+const DS_STORE: &str = ".DS_Store";
+
 pub struct StdFilesystem {
     root: PathBuf,
     last_opened: Option<(ImagePath, File)>,
@@ -112,9 +114,10 @@ impl FilesystemHierarchy for StdFilesystem {
         let dir = dir.to_os_path(&self.root);
         let entries = fs::read_dir(&dir)
             .map_err(|err| path_error(&dir, err.kind(), err))?
-            .map(|entry| {
-                let entry = entry.map_err(|err| path_error(&dir, err.kind(), err))?;
-                self.file_entry(&dir, entry)
+            .filter_map(|entry| match entry {
+                Ok(entry) if entry.file_name() == DS_STORE => None,
+                Ok(entry) => Some(self.file_entry(&dir, entry)),
+                Err(err) => Some(Err(path_error(&dir, err.kind(), err))),
             })
             .collect::<io::Result<_>>()?;
         Ok(entries)
@@ -236,6 +239,30 @@ mod test {
                 len: 0,
             },],
         );
+    }
+
+    #[test]
+    fn test_read_dir_skips_ds_store() {
+        let tempdir = tempfile::tempdir().expect("Failed to create tempdir");
+        std::fs::create_dir(tempdir.path().join("subdir")).expect("Failed to create dir");
+        for path in [".DS_Store", "file", "subdir/.DS_Store", "subdir/entry"] {
+            std::fs::write(tempdir.path().join(path), b"data").expect("Failed to write file");
+        }
+
+        let mut stdfs = StdFilesystem::create(tempdir.path());
+        for (dir, expected) in [
+            ("/", ["file", "subdir"].as_slice()),
+            ("/subdir", &["entry"]),
+        ] {
+            let mut names: Vec<_> = stdfs
+                .read_dir(&dir.into())
+                .expect("read_dir should succeed")
+                .into_iter()
+                .map(|entry| entry.name)
+                .collect();
+            names.sort();
+            assert_eq!(names, expected);
+        }
     }
 
     #[test]
