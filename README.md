@@ -22,19 +22,25 @@ Running `xdvdfs` with no args will bring up the help screen, showing supported s
 
 ```sh
 $ xdvdfs
-Usage: xdvdfs [COMMAND]
+Tool for interacting with XISO/XDVDFS images
+
+Usage: xdvdfs <COMMAND>
 
 Commands:
-  ls           List files in an image
-  tree         List all files in an image, recursively
-  md5          Show MD5 checksums for files in an image
-  checksum     Compute deterministic checksum of image contents
-  info         Print information about image metadata
-  copy-out     Copy a file or directory out of the provided image file
-  unpack       Unpack an entire image to a directory
-  pack         Pack an image from a given directory or source ISO image
-  compress     Pack and compress an image from a given directory or source ISO image
-  help         Print this message or the help of the given subcommand(s)
+  ls        List files in an image
+  tree      List all files in an image, recursively
+  md5       Show MD5 checksums for files in an image
+  checksum  Compute deterministic checksum of image contents
+  info      Print information about image metadata
+  copy-out  Copy a file or directory out of the provided image file
+  unpack    Unpack an entire image to a directory
+  pack      Pack an image from a given directory or source ISO image
+  compress  Pack and compress an image from a given directory or source ISO image
+  help      Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help     Print help
+  -V, --version  Print version
 ```
 
 Running a subcommand with the `-h` flag will show help information for that specific subcommand.
@@ -98,10 +104,6 @@ Unpacking rejects images with file names that could escape the output directory,
 | `xdvdfs checksum [path to img1]...` | Computes a checksum for all image contents to check integrity against other images |
 | `xdvdfs info <path to image> [path within image]` | Prints metadata info for the specified directory entry, or root volume |
 | `xdvdfs copy-out <path to image> <path within image> <destination path>` | Copies a single file or directory out of the provided image |
-
-xdvdfs-cli can be run in an extract-xiso (best-effort) compatibility mode by renaming (or symlinking) the executable
-to be named `extract-xiso`. The command-line interface then mimics extract-xiso's parameters. Only basic use cases
-(i.e. `-xlrc` modes and `-dD` options) are supported, and most options are no-ops.
 
 ## xdvdfs-core
 
