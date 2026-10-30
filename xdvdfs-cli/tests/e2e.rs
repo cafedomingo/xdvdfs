@@ -24,6 +24,15 @@ const MAX_DIRENT_OFFSET: usize = 65536;
 #[cfg(unix)]
 const OVERSIZED_FILE_LEN: u64 = (1 << 32) + 1;
 
+const CSO_SIZE_FIELD: usize = 8;
+const CSO_HEADER_LEN: usize = 24;
+const CSO_COMPRESSED: u32 = 1 << 31;
+const CSO_ALIGNMENT: u32 = 2;
+/// `xdvdfs checksum` of `tests/fixtures/ciso-0.3.0.cso` from xdvdfs 6cd1a0e,
+/// which read it with ciso 0.3.0
+const CISO_FIXTURE_CHECKSUM: &str =
+    "30b8ec9b15eb469578d0220ff18714b96f5c41327c1ca29c0a313df580a8a014";
+
 fn numbered(i: usize) -> String {
     format!("{i:0NAME_LEN$}")
 }
@@ -34,6 +43,19 @@ fn run(args: &[&OsStr]) {
 
 fn pack(src: &Path, img: &Path) {
     run(&["pack".as_ref(), src.as_ref(), img.as_ref()]);
+}
+
+fn compress(src: &Path, img: &Path) {
+    run(&["compress".as_ref(), src.as_ref(), img.as_ref()]);
+}
+
+fn names_in(dir: &Path) -> Vec<String> {
+    let mut names: Vec<_> = fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    names.sort();
+    names
 }
 
 fn unpack(img: &Path, out: &Path) {
@@ -465,7 +487,7 @@ fn truncated_directory_table_names_directory() {
         &["info".as_ref(), img.as_ref(), "/sub".as_ref()],
     ];
     for args in commands {
-        // ciso writes into the working directory
+        // compress's default output goes in the working directory
         let stderr = assert_error(&xdvdfs_in(work.path(), args));
         assert!(stderr.contains(truncated), "{args:?} printed:\n{stderr}");
     }
@@ -596,7 +618,7 @@ fn compress_truncated_image_source_fails() {
     let work = tempdir().unwrap();
     let img = truncated_image(work.path());
 
-    // ciso writes into the working directory
+    // compress's default output goes in the working directory
     let compress = xdvdfs_in(work.path(), &["compress".as_ref(), img.as_ref()]);
     let stderr = assert_error(&compress);
     assert!(stderr.contains("big.bin"), "compress printed:\n{stderr}");
@@ -625,6 +647,7 @@ fn compress_dot_source() {
         &src,
         &["compress".as_ref(), ".".as_ref(), "../out.cso".as_ref()],
     ));
+    assert!(work.path().join("out.1.cso").exists());
 }
 
 #[test]
@@ -643,12 +666,106 @@ fn compress_matches_pack() {
     );
     pack(&src, &img);
 
-    // ciso drops the output's directory and names the first part `.1.cso`
-    assert_success(&xdvdfs_in(
-        work.path(),
-        &["compress".as_ref(), "src".as_ref(), "out.cso".as_ref()],
-    ));
+    compress(&src, &work.path().join("out.cso"));
     assert_eq!(checksum(&work.path().join("out.1.cso")), checksum(&img));
+}
+
+#[test]
+fn compress_output_dir() {
+    let work = tempdir().unwrap();
+    let cwd = tempdir().unwrap();
+    let src = work.path().join("src");
+    let sub = work.path().join("sub");
+    let img = work.path().join("img.xiso");
+    write_tree(&src, &[("f", b"data")], &[]);
+    fs::create_dir(&sub).unwrap();
+    pack(&src, &img);
+
+    assert_success(&xdvdfs_in(
+        cwd.path(),
+        &[
+            "compress".as_ref(),
+            src.as_ref(),
+            sub.join("out.cso").as_ref(),
+        ],
+    ));
+    assert_eq!(fs::read_dir(cwd.path()).unwrap().count(), 0);
+    assert_eq!(names_in(&sub), ["out.1.cso"]);
+    assert_eq!(checksum(&sub.join("out.1.cso")), checksum(&img));
+}
+
+#[test]
+fn compress_removes_stale_part() {
+    let work = tempdir().unwrap();
+    let src = work.path().join("src");
+    let img = work.path().join("img.xiso");
+    write_tree(&src, &[("f", b"data")], &[]);
+    pack(&src, &img);
+    fs::write(work.path().join("out.2.cso"), b"stale").unwrap();
+
+    compress(&src, &work.path().join("out.cso"));
+    assert!(!work.path().join("out.2.cso").exists());
+    assert_eq!(checksum(&work.path().join("out.1.cso")), checksum(&img));
+}
+
+#[test]
+fn compress_keeps_source_named_like_a_part() {
+    let work = tempdir().unwrap();
+    let src = work.path().join("src");
+    let img = work.path().join("out.2.cso");
+    write_tree(&src, &[("f", b"data")], &[]);
+    pack(&src, &img);
+    let packed = fs::read(&img).unwrap();
+
+    let out = work.path().join("out.cso");
+    assert_error(&xdvdfs(&["compress".as_ref(), img.as_ref(), out.as_ref()]));
+    assert!(fs::read(&img).unwrap() == packed, "out.2.cso changed");
+    assert_eq!(names_in(work.path()), ["out.2.cso", "src"]);
+}
+
+#[test]
+fn compress_failure_keeps_existing_output() {
+    let work = tempdir().unwrap();
+    let good = work.path().join("good");
+    let bad = work.path().join("bad");
+    let out = work.path().join("out.cso");
+    write_tree(&good, &[("f", b"good")], &[]);
+    write_tree(&bad, &[("日本.txt", b"bad")], &[]);
+    compress(&good, &out);
+    let compressed = fs::read(work.path().join("out.1.cso")).unwrap();
+
+    assert_error(&xdvdfs(&["compress".as_ref(), bad.as_ref(), out.as_ref()]));
+    assert!(
+        fs::read(work.path().join("out.1.cso")).unwrap() == compressed,
+        "out.1.cso changed"
+    );
+    assert_eq!(names_in(work.path()), ["bad", "good", "out.1.cso"]);
+}
+
+#[test]
+fn cso_reads_ciso_fixture() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ciso-0.3.0.cso");
+    let cso = fs::read(&fixture).unwrap();
+    let u32_at = |at: usize| u32::from_le_bytes(cso[at..][..4].try_into().unwrap());
+    let image_len = u64::from_le_bytes(cso[CSO_SIZE_FIELD..][..8].try_into().unwrap());
+    let blocks = (image_len / SECTOR_LEN as u64) as usize;
+    let entry = |i: usize| u32_at(CSO_HEADER_LEN + 4 * i);
+    let offset = |entry: u32| ((entry & !CSO_COMPRESSED) as usize) << CSO_ALIGNMENT;
+
+    assert!(
+        (0..blocks).any(|i| entry(i) & CSO_COMPRESSED == 0),
+        "no stored block"
+    );
+    let last = entry(blocks - 1);
+    assert!(last & CSO_COMPRESSED != 0, "last block is stored");
+    let last_end = offset(last) + 4 + u32_at(offset(last)) as usize;
+    let end_entry = offset(entry(blocks));
+    assert!(
+        end_entry < last_end && end_entry < cso.len(),
+        "final entry {end_entry} isn't floored below {last_end}"
+    );
+
+    assert_eq!(checksum(&fixture), CISO_FIXTURE_CHECKSUM);
 }
 
 #[test]

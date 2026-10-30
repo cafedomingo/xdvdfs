@@ -6,3 +6,4 @@
 **/dist/**
 **/*.log
 result
+!/xdvdfs-cli/tests/fixtures/*.cso

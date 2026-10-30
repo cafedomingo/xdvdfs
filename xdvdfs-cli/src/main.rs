@@ -8,6 +8,7 @@ mod cmd_read;
 mod cmd_unpack;
 mod img;
 mod progress;
+mod split;
 
 mod exiso_compat;
 
