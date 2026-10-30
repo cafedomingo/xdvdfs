@@ -67,7 +67,7 @@ pub fn cmd_ls(args: &LsArgs) -> anyhow::Result<()> {
 #[command(about = "List all files in an image, recursively")]
 pub struct TreeArgs {
     #[arg(help = "Path to XISO image")]
-    pub image_path: String,
+    image_path: String,
 }
 
 pub fn cmd_tree(args: &TreeArgs) -> anyhow::Result<()> {

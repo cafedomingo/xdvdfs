@@ -79,10 +79,10 @@ fn copyout_directory(
 #[command(about = "Unpack an entire image to a directory")]
 pub struct UnpackArgs {
     #[arg(help = "Path to XISO image")]
-    pub image_path: String,
+    image_path: String,
 
     #[arg(help = "Output directory")]
-    pub path: Option<String>,
+    path: Option<String>,
 }
 
 pub fn cmd_unpack(args: &UnpackArgs) -> Result<(), anyhow::Error> {
