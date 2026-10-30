@@ -1,4 +1,3 @@
-use maybe_async::maybe_async;
 use thiserror::Error;
 
 use crate::blockdev::BlockDeviceRead;
@@ -15,8 +14,7 @@ pub enum VolumeError<E> {
 
 /// Read the XDVDFS volume descriptor from sector 32 of the drive
 /// Returns None if the volume descriptor is invalid
-#[maybe_async]
-pub async fn read_volume<BDR: BlockDeviceRead + ?Sized>(
+pub fn read_volume<BDR: BlockDeviceRead + ?Sized>(
     dev: &mut BDR,
 ) -> Result<VolumeDescriptor, VolumeError<BDR::ReadError>> {
     let mut buffer = [0; core::mem::size_of::<VolumeDescriptor>()];
@@ -27,7 +25,6 @@ pub async fn read_volume<BDR: BlockDeviceRead + ?Sized>(
     // and propagate up the real error independently.
     // For now just assume any read error means the volume is invalid.
     dev.read(32 * SECTOR_SIZE_U64, &mut buffer)
-        .await
         .map_err(|_| VolumeError::InvalidVolume)?;
 
     VolumeDescriptor::deserialize(&buffer)
@@ -36,10 +33,8 @@ pub async fn read_volume<BDR: BlockDeviceRead + ?Sized>(
         .ok_or(VolumeError::InvalidVolume)
 }
 
-#[cfg(all(test, feature = "std"))]
+#[cfg(test)]
 mod test {
-    use futures::executor::block_on;
-
     use crate::{
         blockdev::BlockDeviceWrite,
         layout::{
@@ -55,7 +50,7 @@ mod test {
     #[test]
     fn test_read_volume_from_disk_not_enough_disk_space() {
         let mut data = [0u8];
-        let res = block_on(read_volume(data.as_mut_slice()));
+        let res = read_volume(data.as_mut_slice());
         assert_eq!(res, Err(VolumeError::InvalidVolume));
     }
 
@@ -74,10 +69,11 @@ mod test {
         volume[0] = 0;
         volume[0x7ec] = 0;
 
-        block_on(slbd.write(32 * SECTOR_SIZE_U64, &volume)).expect("Write should succeed");
+        slbd.write(32 * SECTOR_SIZE_U64, &volume)
+            .expect("Write should succeed");
 
         let mut dev = SectorLinearImage::new(&slbd, &mut slbfs);
-        let res = block_on(read_volume(&mut dev));
+        let res = read_volume(&mut dev);
         assert_eq!(res, Err(VolumeError::InvalidVolume));
     }
 
@@ -92,10 +88,11 @@ mod test {
         volume[0x14] = 10;
         volume[0x18] = 20;
 
-        block_on(slbd.write(32 * SECTOR_SIZE_U64, &volume)).expect("Write should succeed");
+        slbd.write(32 * SECTOR_SIZE_U64, &volume)
+            .expect("Write should succeed");
 
         let mut dev = SectorLinearImage::new(&slbd, &mut slbfs);
-        let res = block_on(read_volume(&mut dev));
+        let res = read_volume(&mut dev);
         let volume_expected = VolumeDescriptor::new(DirectoryEntryTable {
             region: DiskRegion {
                 sector: 10,

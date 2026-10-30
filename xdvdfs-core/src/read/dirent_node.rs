@@ -1,18 +1,14 @@
-use maybe_async::maybe_async;
-
 use crate::{blockdev::BlockDeviceRead, layout::DirectoryEntryNode, read::DirectoryEntryReadError};
 
 impl DirectoryEntryNode {
     /// Read a DirectoryEntryNode from disk, including
     /// the name. Returns None if the node is not present.
-    #[maybe_async]
-    pub async fn read_from_disk<BDR: BlockDeviceRead + ?Sized>(
+    pub fn read_from_disk<BDR: BlockDeviceRead + ?Sized>(
         dev: &mut BDR,
         offset: u64,
     ) -> Result<Option<Self>, DirectoryEntryReadError<BDR::ReadError>> {
         let mut dirent_buf = [0; 0xe];
         dev.read(offset, &mut dirent_buf)
-            .await
             .map_err(DirectoryEntryReadError::IOError)?;
 
         let dirent = Self::deserialize(&dirent_buf, offset)
@@ -24,7 +20,6 @@ impl DirectoryEntryNode {
         let name_len = dirent.node.dirent.filename_length as usize;
         let name_buf = &mut dirent.name[0..name_len];
         dev.read(offset + 0xe, name_buf)
-            .await
             .map_err(DirectoryEntryReadError::IOError)?;
 
         Ok(Some(dirent))
@@ -33,8 +28,6 @@ impl DirectoryEntryNode {
 
 #[cfg(test)]
 mod test {
-    use futures::executor::block_on;
-
     use crate::layout::{
         DirectoryEntryDiskData, DirectoryEntryDiskNode, DirectoryEntryNode, DirentAttributes,
         DiskRegion,
@@ -43,14 +36,14 @@ mod test {
     #[test]
     fn test_read_dirent_node_from_disk_empty_ff_filled() {
         let mut data = [0xffu8; 0x10];
-        let res = block_on(DirectoryEntryNode::read_from_disk(data.as_mut_slice(), 2));
+        let res = DirectoryEntryNode::read_from_disk(data.as_mut_slice(), 2);
         assert_eq!(res, Ok(None));
     }
 
     #[test]
     fn test_read_dirent_node_from_disk_empty_zero_filled() {
         let mut data = [0x00u8; 0x10];
-        let res = block_on(DirectoryEntryNode::read_from_disk(data.as_mut_slice(), 2));
+        let res = DirectoryEntryNode::read_from_disk(data.as_mut_slice(), 2);
         assert_eq!(res, Ok(None));
     }
 
@@ -61,8 +54,8 @@ mod test {
             0x1, 0x1, 0x2, 0x2, 0x1, 0x0, 0x0, 0x0, 0x2, 0x0, 0x0, 0x0, 0xff, 0x2, b'A', b'b',
         ];
 
-        let res = block_on(DirectoryEntryNode::read_from_disk(data, 4))
-            .expect("Read/deserialize should not fail");
+        let res =
+            DirectoryEntryNode::read_from_disk(data, 4).expect("Read/deserialize should not fail");
         let mut dirent_name = [0u8; 256];
         dirent_name[0] = b'A';
         dirent_name[1] = b'b';

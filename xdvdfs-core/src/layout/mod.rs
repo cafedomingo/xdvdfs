@@ -26,7 +26,5 @@ pub use table::*;
 mod volume;
 pub use volume::*;
 
-#[cfg(feature = "write")]
 mod write;
-#[cfg(feature = "write")]
 pub use write::*;

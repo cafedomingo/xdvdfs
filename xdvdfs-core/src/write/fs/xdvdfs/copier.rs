@@ -1,7 +1,4 @@
-use alloc::boxed::Box;
 use core::convert::Infallible;
-
-use maybe_async::maybe_async;
 
 use crate::blockdev::{BlockDeviceRead, BlockDeviceWrite, NullBlockDevice};
 
@@ -12,13 +9,12 @@ use super::XDVDFSFilesystemError;
 /// block devices and performs a buffered copy between them.
 /// Override this trait if making assumptions about your block devices
 /// allows for optimizing copies between them.
-#[maybe_async]
 pub trait RWCopier<R, W>: Default
 where
     R: BlockDeviceRead + ?Sized,
     W: BlockDeviceWrite + ?Sized,
 {
-    async fn copy(
+    fn copy(
         &mut self,
         offset_in: u64,
         offset_out: u64,
@@ -39,7 +35,7 @@ pub struct DefaultCopier<R: ?Sized, W: ?Sized> {
 impl<R: ?Sized, W: ?Sized> DefaultCopier<R, W> {
     pub fn with_buffer_size(buffer_size: usize) -> Self {
         Self {
-            buffer: alloc::vec![0u8; buffer_size].into_boxed_slice(),
+            buffer: vec![0u8; buffer_size].into_boxed_slice(),
             r_type: core::marker::PhantomData,
             w_type: core::marker::PhantomData,
         }
@@ -52,13 +48,12 @@ impl<R: ?Sized, W: ?Sized> Default for DefaultCopier<R, W> {
     }
 }
 
-#[maybe_async]
 impl<R, W> RWCopier<R, W> for DefaultCopier<R, W>
 where
     R: BlockDeviceRead + ?Sized,
     W: BlockDeviceWrite + ?Sized,
 {
-    async fn copy(
+    fn copy(
         &mut self,
         offset_in: u64,
         offset_out: u64,
@@ -73,10 +68,8 @@ where
             let slice = &mut self.buffer[0..(to_copy as usize)];
 
             src.read(offset_in + copied, slice)
-                .await
                 .map_err(XDVDFSFilesystemError::BlockDevReadErr)?;
             dest.write(offset_out + copied, slice)
-                .await
                 .map_err(XDVDFSFilesystemError::BlockDevWriteErr)?;
             copied += to_copy;
         }
@@ -105,13 +98,12 @@ impl<R: ?Sized, W: ?Sized> Default for StdIOCopier<R, W> {
     }
 }
 
-#[maybe_async]
 impl<R, W> RWCopier<R, W> for StdIOCopier<R, W>
 where
     R: BlockDeviceRead<ReadError = std::io::Error> + std::io::Read + std::io::Seek + Sized,
     W: BlockDeviceWrite<WriteError = std::io::Error> + std::io::Write + std::io::Seek + ?Sized,
 {
-    async fn copy(
+    fn copy(
         &mut self,
         offset_in: u64,
         offset_out: u64,
@@ -132,14 +124,13 @@ where
     }
 }
 
-#[maybe_async]
 impl<R, W> RWCopier<crate::blockdev::OffsetWrapper<R>, W>
     for StdIOCopier<crate::blockdev::OffsetWrapper<R>, W>
 where
     R: BlockDeviceRead<ReadError = std::io::Error> + std::io::Read + std::io::Seek + Sized,
     W: BlockDeviceWrite<WriteError = std::io::Error> + std::io::Write + std::io::Seek + ?Sized,
 {
-    async fn copy(
+    fn copy(
         &mut self,
         offset_in: u64,
         offset_out: u64,
@@ -174,12 +165,11 @@ impl<R: ?Sized> Default for NullCopier<R> {
     }
 }
 
-#[maybe_async]
 impl<R> RWCopier<R, NullBlockDevice> for NullCopier<R>
 where
     R: BlockDeviceRead + ?Sized,
 {
-    async fn copy(
+    fn copy(
         &mut self,
         _offset_in: u64,
         offset_out: u64,
@@ -194,20 +184,18 @@ where
 
 #[cfg(test)]
 mod test {
-    use futures::executor::block_on;
-
     use crate::{blockdev::NullBlockDevice, write::fs::NullCopier};
 
     use super::{DefaultCopier, RWCopier};
 
     #[test]
     fn test_write_xdvdfs_default_copier() {
-        let mut dest = alloc::vec![0u8; 20];
-        let mut src = alloc::vec![0xffu8; 20];
+        let mut dest = vec![0u8; 20];
+        let mut src = vec![0xffu8; 20];
         src[0..3].fill(0x2e);
 
         let mut copier = DefaultCopier::with_buffer_size(5);
-        let res = block_on(copier.copy(1, 2, 20 - 2, src.as_mut_slice(), dest.as_mut_slice()));
+        let res = copier.copy(1, 2, 20 - 2, src.as_mut_slice(), dest.as_mut_slice());
         assert_eq!(res, Ok(20 - 2));
         assert_eq!(dest[0..2], [0, 0]);
         assert_eq!(src[1..19], dest[2..]);
@@ -215,21 +203,19 @@ mod test {
 
     #[test]
     fn test_write_xdvdfs_null_copier() {
-        let mut src = alloc::vec![0xffu8; 20];
+        let mut src = vec![0xffu8; 20];
         let mut dest = NullBlockDevice::default();
 
         let mut copier = NullCopier::default();
-        let res = block_on(copier.copy(1, 2, 20 - 2, src.as_mut_slice(), &mut dest));
+        let res = copier.copy(1, 2, 20 - 2, src.as_mut_slice(), &mut dest);
         assert_eq!(res, Ok(20 - 2));
         assert_eq!(dest.len_blocking(), 20);
     }
 }
 
-#[cfg(all(test, feature = "std"))]
+#[cfg(test)]
 mod test_std {
     use std::io::Cursor;
-
-    use futures::executor::block_on;
 
     use crate::{
         blockdev::{OffsetWrapper, XDVDFSOffsets},
@@ -241,12 +227,12 @@ mod test_std {
         let dest = std::vec![0u8; 20];
         let mut dest = Cursor::new(dest);
 
-        let mut src = alloc::vec![0xffu8; 20];
+        let mut src = vec![0xffu8; 20];
         src[0..3].fill(0x2e);
         let mut src = Cursor::new(src);
 
         let mut copier = StdIOCopier::default();
-        let res = block_on(copier.copy(1, 2, 20 - 2, &mut src, &mut dest));
+        let res = copier.copy(1, 2, 20 - 2, &mut src, &mut dest);
         assert!(res.is_ok_and(|sz| sz == 20 - 2));
         assert_eq!(dest.get_ref()[0..2], [0, 0]);
         assert_eq!(src.get_ref()[1..19], dest.get_ref()[2..]);
@@ -257,13 +243,13 @@ mod test_std {
         let dest = std::vec![0u8; 20];
         let mut dest = Cursor::new(dest);
 
-        let mut src = alloc::vec![0xffu8; 20 + XDVDFSOffsets::XGD3 as usize];
+        let mut src = vec![0xffu8; 20 + XDVDFSOffsets::XGD3 as usize];
         src[0..(3 + XDVDFSOffsets::XGD3 as usize)].fill(0x2e);
         let src = Cursor::new(src);
         let mut src = OffsetWrapper::new_with_provided_offset(src, XDVDFSOffsets::XGD3);
 
         let mut copier = StdIOCopier::default();
-        let res = block_on(copier.copy(1, 2, 20 - 2, &mut src, &mut dest));
+        let res = copier.copy(1, 2, 20 - 2, &mut src, &mut dest);
         assert!(res.is_ok_and(|sz| sz == 20 - 2));
         assert_eq!(dest.get_ref()[0..2], [0, 0]);
 

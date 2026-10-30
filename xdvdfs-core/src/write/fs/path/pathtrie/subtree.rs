@@ -1,7 +1,6 @@
 use core::ops::{Index, IndexMut};
 
-use alloc::boxed::Box;
-use alloc::collections::VecDeque;
+use std::collections::VecDeque;
 
 use super::PathPrefixTree;
 
@@ -95,8 +94,6 @@ impl<T> IndexMut<char> for PPTSubtree<T> {
 
 #[cfg(test)]
 mod test {
-    use alloc::boxed::Box;
-
     use crate::write::fs::PathPrefixTree;
 
     use super::PPTSubtree;

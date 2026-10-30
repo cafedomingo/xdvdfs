@@ -8,9 +8,11 @@ use common::{
     assert_error, assert_success, assert_trees_equal, place_at_offset, write_tree, xdvdfs,
     xdvdfs_in,
 };
+use md5::{Digest, Md5};
 use tempfile::tempdir;
 use xdvdfs::blockdev::XDVDFSOffsets;
 use xdvdfs::layout::DirectoryEntryDiskNode;
+use xdvdfs::read::DATA_CHUNK_LEN;
 
 // 0xe header bytes plus the name make 32-byte dirents, so table sizes
 // land on sector and offset boundaries.
@@ -19,8 +21,6 @@ const DIRENT_HEADER_LEN: usize = 0xe;
 const DIRENT_LEN: usize = DIRENT_HEADER_LEN + NAME_LEN;
 const SECTOR_LEN: usize = 2048;
 const MAX_DIRENT_OFFSET: usize = 65536;
-// Mirrors cmd_unpack.rs, which tests can't import from the binary
-const EXTRACT_CHUNK_LEN: usize = 1 << 20;
 #[cfg(unix)]
 const OVERSIZED_FILE_LEN: u64 = (1 << 32) + 1;
 
@@ -236,6 +236,35 @@ fn copy_out() {
 }
 
 #[test]
+fn md5_file_larger_than_one_chunk() {
+    let big: Vec<u8> = (0..2 * DATA_CHUNK_LEN + 13)
+        .map(|i| (i % 251) as u8)
+        .collect();
+    let files: [(&str, &[u8]); 2] = [("big.bin", &big), ("small.txt", b"small")];
+    let work = tempdir().unwrap();
+    let src = work.path().join("src");
+    let img = work.path().join("img.xiso");
+    write_tree(&src, &files, &[]);
+    pack(&src, &img);
+
+    let out = xdvdfs(&["md5".as_ref(), img.as_ref()]);
+    assert_success(&out);
+    // md5 prints in image order, which follows the host's directory listing.
+    let mut actual: Vec<String> = String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    actual.sort();
+    let mut expected: Vec<String> = files
+        .iter()
+        .map(|(name, data)| format!("{:x}  /{name}", Md5::digest(data)))
+        .collect();
+    expected.sort();
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn windows_1252_name_roundtrip() {
     let work = tempdir().unwrap();
     let src = work.path().join("src");
@@ -254,7 +283,7 @@ fn xgd2_offset_image() {
     let work = tempdir().unwrap();
     let src = work.path().join("src");
     let img = work.path().join("img.xiso");
-    let multi_chunk = vec![3; 2 * EXTRACT_CHUNK_LEN + 17];
+    let multi_chunk = vec![3; 2 * DATA_CHUNK_LEN + 17];
     write_tree(
         &src,
         &[

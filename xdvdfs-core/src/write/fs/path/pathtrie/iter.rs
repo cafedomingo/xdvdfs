@@ -1,5 +1,4 @@
-use alloc::collections::VecDeque;
-use alloc::string::String;
+use std::collections::VecDeque;
 
 use crate::write::fs::path::PathPrefixTree;
 
@@ -11,8 +10,6 @@ impl<'a, T> Iterator for PPTIter<'a, T> {
     type Item = (String, &'a T);
 
     fn next(&mut self) -> Option<Self::Item> {
-        use alloc::borrow::ToOwned;
-
         // Expand until we find a node with a record
         while let Some(subtree) = self.queue.pop_front() {
             let (name, node) = &subtree;
@@ -47,9 +44,6 @@ mod test {
 
     #[test]
     fn test_ppt_iterator() {
-        use alloc::string::{String, ToString};
-        use alloc::vec::Vec;
-
         let mut ppt = PathPrefixTree::default();
         ppt.insert_tail("abc", 1).insert_tail("tail", 2);
         ppt.insert_tail("hjk", 3).insert_tail("tail", 4);

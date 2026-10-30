@@ -1,10 +1,5 @@
 use core::ops::DerefMut;
 
-#[cfg(not(feature = "sync"))]
-use alloc::boxed::Box;
-
-use maybe_async::maybe_async;
-
 use super::PathRef;
 use crate::blockdev::BlockDeviceWrite;
 
@@ -14,12 +9,11 @@ use crate::blockdev::BlockDeviceWrite;
 /// into an output block device, specialized by the block device type.
 /// Multiple implementations of this trait allow the filesystem to be
 /// used to create images on various output types.
-#[maybe_async]
-pub trait FilesystemCopier<BDW: BlockDeviceWrite + ?Sized>: Send + Sync {
+pub trait FilesystemCopier<BDW: BlockDeviceWrite + ?Sized> {
     type Error: core::error::Error + Send + Sync + 'static;
 
     /// Copy the entire contents of file `src` into `dest` at the specified offset
-    async fn copy_file_in(
+    fn copy_file_in(
         &mut self,
         src: PathRef<'_>,
         dest: &mut BDW,
@@ -29,16 +23,15 @@ pub trait FilesystemCopier<BDW: BlockDeviceWrite + ?Sized>: Send + Sync {
     ) -> Result<u64, Self::Error>;
 }
 
-#[maybe_async]
 impl<BDW, F, FDeref> FilesystemCopier<BDW> for FDeref
 where
     BDW: BlockDeviceWrite + ?Sized,
     F: FilesystemCopier<BDW> + ?Sized,
-    FDeref: DerefMut<Target = F> + Send + Sync,
+    FDeref: DerefMut<Target = F>,
 {
     type Error = F::Error;
 
-    async fn copy_file_in(
+    fn copy_file_in(
         &mut self,
         src: PathRef<'_>,
         dest: &mut BDW,
@@ -48,15 +41,11 @@ where
     ) -> Result<u64, Self::Error> {
         self.deref_mut()
             .copy_file_in(src, dest, input_offset, output_offset, size)
-            .await
     }
 }
 
 #[cfg(test)]
 mod test {
-    use alloc::boxed::Box;
-    use futures::executor::block_on;
-
     use crate::{
         blockdev::{BlockDeviceWrite, NullBlockDevice},
         write::fs::{FilesystemCopier, MemoryFilesystem, PathRef},
@@ -64,11 +53,10 @@ mod test {
 
     struct FSContainer<F>(F);
 
-    #[maybe_async::maybe_async]
     impl<BDW: BlockDeviceWrite, F: FilesystemCopier<BDW>> FilesystemCopier<BDW> for FSContainer<F> {
         type Error = F::Error;
 
-        async fn copy_file_in(
+        fn copy_file_in(
             &mut self,
             src: PathRef<'_>,
             dest: &mut BDW,
@@ -78,7 +66,6 @@ mod test {
         ) -> Result<u64, Self::Error> {
             self.0
                 .copy_file_in(src, dest, input_offset, output_offset, size)
-                .await
         }
     }
 
@@ -92,7 +79,7 @@ mod test {
 
         let mut nullbd = NullBlockDevice::default();
 
-        let res = block_on(fs.copy_file_in("/a".into(), &mut nullbd, 0, 0, 123));
+        let res = fs.copy_file_in("/a".into(), &mut nullbd, 0, 0, 123);
         assert_eq!(res, Ok(123));
     }
 
@@ -106,7 +93,7 @@ mod test {
 
         let mut nullbd = NullBlockDevice::default();
 
-        let res = block_on(fs.copy_file_in("/a".into(), &mut nullbd, 0, 0, 123));
+        let res = fs.copy_file_in("/a".into(), &mut nullbd, 0, 0, 123);
         assert_eq!(res, Ok(123));
     }
 }

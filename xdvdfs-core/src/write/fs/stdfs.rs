@@ -1,14 +1,7 @@
-use alloc::borrow::ToOwned;
-use alloc::format;
-use alloc::vec::Vec;
 use core::fmt::Display;
-use maybe_async::maybe_async;
 use std::fs::{self, DirEntry, File};
 use std::io::{self, ErrorKind, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-
-#[cfg(not(feature = "sync"))]
-use alloc::boxed::Box;
 
 use crate::blockdev::{BlockDeviceWrite, NullBlockDevice};
 
@@ -100,11 +93,10 @@ impl StdFilesystem {
     }
 }
 
-#[maybe_async]
 impl FilesystemHierarchy for StdFilesystem {
     type Error = io::Error;
 
-    async fn read_dir(&mut self, dir: PathRef<'_>) -> Result<Vec<FileEntry>, io::Error> {
+    fn read_dir(&mut self, dir: PathRef<'_>) -> Result<Vec<FileEntry>, io::Error> {
         let dir = dir.as_path_buf(&self.root);
         fs::read_dir(&dir)
             .map_err(|err| path_error(&dir, err.kind(), err))?
@@ -116,14 +108,13 @@ impl FilesystemHierarchy for StdFilesystem {
     }
 }
 
-#[maybe_async]
 impl<T> FilesystemCopier<T> for StdFilesystem
 where
     T: io::Write + Seek + BlockDeviceWrite<WriteError = io::Error>,
 {
     type Error = io::Error;
 
-    async fn copy_file_in(
+    fn copy_file_in(
         &mut self,
         src: PathRef<'_>,
         dest: &mut T,
@@ -145,11 +136,10 @@ where
     }
 }
 
-#[maybe_async]
 impl FilesystemCopier<[u8]> for StdFilesystem {
     type Error = io::Error;
 
-    async fn copy_file_in(
+    fn copy_file_in(
         &mut self,
         src: PathRef<'_>,
         dest: &mut [u8],
@@ -172,11 +162,10 @@ impl FilesystemCopier<[u8]> for StdFilesystem {
     }
 }
 
-#[maybe_async]
 impl FilesystemCopier<NullBlockDevice> for StdFilesystem {
     type Error = core::convert::Infallible;
 
-    async fn copy_file_in(
+    fn copy_file_in(
         &mut self,
         _src: PathRef<'_>,
         dest: &mut NullBlockDevice,
@@ -191,11 +180,7 @@ impl FilesystemCopier<NullBlockDevice> for StdFilesystem {
 
 #[cfg(test)]
 mod test {
-    use alloc::string::ToString;
-    use alloc::vec::Vec;
     use std::io::{Cursor, Write};
-
-    use futures::executor::block_on;
 
     use crate::{
         blockdev::NullBlockDevice,
@@ -224,7 +209,7 @@ mod test {
 
         let mut stdfs = StdFilesystem::create(tempdir.path());
 
-        let mut result = block_on(stdfs.read_dir("/".into())).expect("read_dir should succeed");
+        let mut result = stdfs.read_dir("/".into()).expect("read_dir should succeed");
 
         // Filesystem ordering is non-deterministic,
         // so sort the records by name.
@@ -245,7 +230,9 @@ mod test {
             ],
         );
 
-        let result = block_on(stdfs.read_dir("/subdir".into())).expect("read_dir should succeed");
+        let result = stdfs
+            .read_dir("/subdir".into())
+            .expect("read_dir should succeed");
         assert_eq!(
             result,
             &[FileEntry {
@@ -272,13 +259,13 @@ mod test {
         let mut stdfs = StdFilesystem::create(tempdir.path());
         let mut cursor = Cursor::new(Vec::<u8>::new());
 
-        let result = block_on(stdfs.copy_file_in(
+        let result = stdfs.copy_file_in(
             "subdir/file".into(),
             &mut cursor,
             /*input_offset=*/ 1,
             /*output_offset=*/ 2,
             /*size=*/ 10,
-        ));
+        );
         assert!(result.is_ok_and(|len| len == 10));
         assert_eq!(cursor.get_ref(), b"\0\0ello World");
     }
@@ -299,13 +286,13 @@ mod test {
         let mut stdfs = StdFilesystem::create(tempdir.path());
         let mut buffer = [0u8; 13];
 
-        let result = block_on(stdfs.copy_file_in(
+        let result = stdfs.copy_file_in(
             "subdir/file".into(),
             buffer.as_mut_slice(),
             /*input_offset=*/ 1,
             /*output_offset=*/ 2,
             /*size=*/ 10,
-        ));
+        );
         assert!(result.is_ok_and(|len| len == 10));
         assert_eq!(&buffer, b"\0\0ello World\0");
     }
@@ -326,13 +313,13 @@ mod test {
         let mut stdfs = StdFilesystem::create(tempdir.path());
         let mut nullbd = NullBlockDevice::default();
 
-        let result = block_on(stdfs.copy_file_in(
+        let result = stdfs.copy_file_in(
             "subdir/file".into(),
             &mut nullbd,
             /*input_offset=*/ 1,
             /*output_offset=*/ 2,
             /*size=*/ 10,
-        ));
+        );
         assert!(result.is_ok_and(|len| len == 10));
         assert_eq!(nullbd.len_blocking(), 12);
     }
@@ -346,13 +333,13 @@ mod test {
         let mut stdfs = StdFilesystem::create(tempdir.path());
         let mut cursor = Cursor::new(Vec::<u8>::new());
 
-        let result = block_on(stdfs.copy_file_in(
+        let result = stdfs.copy_file_in(
             "file".into(),
             &mut cursor,
             /*input_offset=*/ 0,
             /*output_offset=*/ 0,
             /*size=*/ 16,
-        ));
+        );
         let err = result.expect_err("copy past the end of the file should fail");
         assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
         assert!(
@@ -370,13 +357,13 @@ mod test {
         let mut stdfs = StdFilesystem::create(tempdir.path());
         let mut buffer = [0u8; 16];
 
-        let result = block_on(stdfs.copy_file_in(
+        let result = stdfs.copy_file_in(
             "file".into(),
             buffer.as_mut_slice(),
             /*input_offset=*/ 0,
             /*output_offset=*/ 0,
             /*size=*/ 16,
-        ));
+        );
         let err = result.expect_err("copy past the end of the file should fail");
         assert!(
             err.to_string().contains(&path.display().to_string()),
@@ -394,12 +381,13 @@ mod test {
 
         let mut slbfs = SectorLinearBlockFilesystem::new(StdFilesystem::create(dir));
         let mut slbd = SectorLinearBlockDevice::default();
-        block_on(slbfs.copy_file_in("/file".into(), &mut slbd, 0, 0, listed_len))
+        slbfs
+            .copy_file_in("/file".into(), &mut slbd, 0, 0, listed_len)
             .expect("Adding the file should succeed");
 
         let mut image = SectorLinearImage::new(&slbd, &mut slbfs);
         let len = listed_len.next_multiple_of(crate::layout::SECTOR_SIZE_U64);
-        block_on(image.read_linear(0, len))
+        image.read_linear(0, len)
     }
 
     #[test]
@@ -439,7 +427,7 @@ mod test {
         symlink("../dir", src.join("dir_link")).expect("Failed to link dir");
 
         let mut stdfs = StdFilesystem::create(&src);
-        let mut result = block_on(stdfs.read_dir("/".into())).expect("read_dir should succeed");
+        let mut result = stdfs.read_dir("/".into()).expect("read_dir should succeed");
         result.sort();
         assert_eq!(
             result,
@@ -466,7 +454,7 @@ mod test {
 
         /// Lists a root holding `links`, and returns the error with the root's
         /// path replaced by `<root>`.
-        fn dir_tree_error(links: &[(&str, &str)]) -> alloc::string::String {
+        fn dir_tree_error(links: &[(&str, &str)]) -> String {
             let tempdir = tempfile::tempdir().expect("Failed to create tempdir");
             let root = tempdir.path().join("src");
             for (link, target) in links {
@@ -476,7 +464,7 @@ mod test {
             }
 
             let mut stdfs = StdFilesystem::create(&root);
-            let res = block_on(dir_tree(&mut stdfs, &mut |_| {}));
+            let res = dir_tree(&mut stdfs, &mut |_| {});
             res.expect_err("dir_tree should fail")
                 .to_string()
                 .replace(&root.display().to_string(), "<root>")

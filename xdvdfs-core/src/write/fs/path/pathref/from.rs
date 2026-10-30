@@ -37,24 +37,18 @@ mod test {
 
     #[test]
     fn test_str_to_pathref() {
-        use alloc::borrow::ToOwned;
-
         let path = "/hello/world/";
         let path: PathRef = path.into();
-        let components: alloc::vec::Vec<alloc::string::String> =
-            path.iter().map(|component| component.to_owned()).collect();
+        let components: Vec<String> = path.iter().map(|component| component.to_owned()).collect();
 
         assert_eq!(components, &["hello", "world",]);
     }
 
     #[test]
     fn test_slice_to_pathref() {
-        use alloc::borrow::ToOwned;
-
         let path = &["hello", "world"].as_slice();
         let path: PathRef = (*path).into();
-        let components: alloc::vec::Vec<alloc::string::String> =
-            path.iter().map(|component| component.to_owned()).collect();
+        let components: Vec<String> = path.iter().map(|component| component.to_owned()).collect();
 
         assert_eq!(components, &["hello", "world",]);
     }
@@ -62,52 +56,41 @@ mod test {
     #[test]
     fn test_pathvec_to_pathref() {
         use super::PathVec;
-        use alloc::borrow::ToOwned;
 
         let path = PathVec::from_base(PathVec::default(), "hello");
         let path = PathVec::from_base(path.clone(), "world");
         let path: PathRef = path.as_path_ref();
-        let components: alloc::vec::Vec<alloc::string::String> =
-            path.iter().map(|x| x.to_owned()).collect();
+        let components: Vec<String> = path.iter().map(|x| x.to_owned()).collect();
 
         assert_eq!(components, &["hello", "world",]);
     }
 
     #[test]
     fn test_pathref_to_pathvec_string() {
-        use alloc::borrow::ToOwned;
-
         let path = "/hello/world";
         let path: PathRef = path.into();
         let path: super::PathVec = path.into();
-        let components: alloc::vec::Vec<alloc::string::String> =
-            path.iter().map(|x| x.to_owned()).collect();
+        let components: Vec<String> = path.iter().map(|x| x.to_owned()).collect();
 
         assert_eq!(components, &["hello", "world",]);
     }
 
     #[test]
     fn test_pathref_to_pathvec_slice() {
-        use alloc::borrow::ToOwned;
-
         let path = &["hello", "world"].as_slice();
         let path: PathRef = (*path).into();
         let path: super::PathVec = path.into();
-        let components: alloc::vec::Vec<alloc::string::String> =
-            path.iter().map(|x| x.to_owned()).collect();
+        let components: Vec<String> = path.iter().map(|x| x.to_owned()).collect();
 
         assert_eq!(components, &["hello", "world",]);
     }
 
     #[test]
     fn test_pathref_to_pathvec_pathvec() {
-        use alloc::borrow::ToOwned;
-
         let path = super::PathVec::from("/hello/world");
         let path: PathRef = path.as_path_ref();
         let path: super::PathVec = path.into();
-        let components: alloc::vec::Vec<alloc::string::String> =
-            path.iter().map(|x| x.to_owned()).collect();
+        let components: Vec<String> = path.iter().map(|x| x.to_owned()).collect();
 
         assert_eq!(components, &["hello", "world",]);
     }

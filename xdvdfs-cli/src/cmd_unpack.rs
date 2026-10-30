@@ -1,7 +1,6 @@
 use crate::img::open_image_raw;
 use anyhow::{anyhow, ensure};
 use clap::Args;
-use maybe_async::maybe_async;
 use std::{
     fs::File,
     io::{BufReader, Read, Write},
@@ -11,11 +10,8 @@ use std::{
 use xdvdfs::{
     blockdev::OffsetWrapper,
     layout::{DirectoryEntryDiskData, DirectoryEntryTable},
+    read::DATA_CHUNK_LEN,
 };
-
-/// Chunks this large keep unpack from being syscall-bound, which it is with
-/// `io::copy`'s 8 KiB chunks.
-const EXTRACT_CHUNK_LEN: u64 = 1 << 20;
 
 fn extract_file(
     img: &mut OffsetWrapper<BufReader<File>>,
@@ -30,7 +26,7 @@ fn extract_file(
 
     dirent.seek_to(img)?;
     let mut data = img.get_mut().take(size);
-    let mut chunk = vec![0; size.min(EXTRACT_CHUNK_LEN) as usize];
+    let mut chunk = vec![0; size.min(DATA_CHUNK_LEN as u64) as usize];
     let mut copied = 0;
     while copied < size {
         let read = data.read(&mut chunk)?;
@@ -46,13 +42,12 @@ fn extract_file(
     Ok(())
 }
 
-#[maybe_async]
-async fn copyout_directory(
+fn copyout_directory(
     img: &mut OffsetWrapper<BufReader<File>>,
     dest_dir: &Path,
     dirtab: &DirectoryEntryTable,
 ) -> anyhow::Result<()> {
-    let tree = dirtab.file_tree(img).await?;
+    let tree = dirtab.file_tree(img)?;
 
     for (dir, dirent) in &tree {
         let dir = dir.trim_start_matches('/');
@@ -88,8 +83,7 @@ pub struct UnpackArgs {
     pub path: Option<String>,
 }
 
-#[maybe_async]
-pub async fn cmd_unpack(args: &UnpackArgs) -> Result<(), anyhow::Error> {
+pub fn cmd_unpack(args: &UnpackArgs) -> Result<(), anyhow::Error> {
     let target_dir = match &args.path {
         Some(path) => PathBuf::from_str(path).unwrap(),
         None => {
@@ -101,10 +95,10 @@ pub async fn cmd_unpack(args: &UnpackArgs) -> Result<(), anyhow::Error> {
         }
     };
 
-    let mut img = open_image_raw(Path::new(&args.image_path)).await?;
-    let volume = xdvdfs::read::read_volume(&mut img).await?;
+    let mut img = open_image_raw(Path::new(&args.image_path))?;
+    let volume = xdvdfs::read::read_volume(&mut img)?;
 
-    copyout_directory(&mut img, &target_dir, &volume.root_table).await
+    copyout_directory(&mut img, &target_dir, &volume.root_table)
 }
 
 #[derive(Args)]
@@ -120,22 +114,18 @@ pub struct CopyOutArgs {
     dest_path: String,
 }
 
-#[maybe_async]
-pub async fn cmd_copyout(args: &CopyOutArgs) -> Result<(), anyhow::Error> {
-    let mut img = open_image_raw(Path::new(&args.image)).await?;
+pub fn cmd_copyout(args: &CopyOutArgs) -> Result<(), anyhow::Error> {
+    let mut img = open_image_raw(Path::new(&args.image))?;
     let dest_path = Path::new(&args.dest_path);
 
-    let volume = xdvdfs::read::read_volume(&mut img).await?;
+    let volume = xdvdfs::read::read_volume(&mut img)?;
     if args.src_path == "/" {
-        return copyout_directory(&mut img, dest_path, &volume.root_table).await;
+        return copyout_directory(&mut img, dest_path, &volume.root_table);
     }
 
-    let dirent = volume
-        .root_table
-        .walk_path(&mut img, &args.src_path)
-        .await?;
+    let dirent = volume.root_table.walk_path(&mut img, &args.src_path)?;
     if let Some(table) = dirent.node.dirent.dirent_table() {
-        return copyout_directory(&mut img, dest_path, &table).await;
+        return copyout_directory(&mut img, dest_path, &table);
     }
 
     extract_file(&mut img, &dirent.node.dirent, dest_path)

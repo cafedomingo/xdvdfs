@@ -1,6 +1,5 @@
 use crate::img::open_image;
 use clap::Args;
-use maybe_async::maybe_async;
 use md5::{Digest, Md5};
 use std::path::Path;
 use xdvdfs::blockdev::BlockDeviceRead;
@@ -15,22 +14,20 @@ pub struct Md5Args {
     path: Option<String>,
 }
 
-#[maybe_async]
-async fn md5_file_dirent<BDR: BlockDeviceRead + ?Sized>(
+fn md5_file_dirent<BDR: BlockDeviceRead + ?Sized>(
     img: &mut BDR,
     file: xdvdfs::layout::DirectoryEntryNode,
 ) -> anyhow::Result<String> {
-    let file_buf = file.node.dirent.read_data_all(img).await?;
-
     let mut hasher = Md5::new();
-    hasher.update(file_buf);
+    file.node
+        .dirent
+        .read_data_chunks(img, |chunk| hasher.update(chunk))?;
     let result = hasher.finalize();
 
     Ok(format!("{result:x}"))
 }
 
-#[maybe_async]
-async fn md5_file_tree<BDR: BlockDeviceRead + ?Sized>(
+fn md5_file_tree<BDR: BlockDeviceRead + ?Sized>(
     img: &mut BDR,
     tree: &Vec<(String, xdvdfs::layout::DirectoryEntryNode)>,
     base: &str,
@@ -43,7 +40,7 @@ async fn md5_file_tree<BDR: BlockDeviceRead + ?Sized>(
         } else {
             format!("{base}/{dir}")
         };
-        let checksum = md5_file_dirent(img, *file).await?;
+        let checksum = md5_file_dirent(img, *file)?;
         let name = file.name_str()?;
         println!("{checksum}  {dir}/{name}");
     }
@@ -51,41 +48,38 @@ async fn md5_file_tree<BDR: BlockDeviceRead + ?Sized>(
     Ok(())
 }
 
-#[maybe_async]
-async fn md5_from_file_path<BDR: BlockDeviceRead + ?Sized>(
+fn md5_from_file_path<BDR: BlockDeviceRead + ?Sized>(
     volume: &xdvdfs::layout::VolumeDescriptor,
     img: &mut BDR,
     file: &str,
 ) -> anyhow::Result<()> {
-    let dirent = volume.root_table.walk_path(img, file).await?;
+    let dirent = volume.root_table.walk_path(img, file)?;
     if let Some(table) = dirent.node.dirent.dirent_table() {
-        let tree = table.file_tree(img).await?;
-        md5_file_tree(img, &tree, file).await?;
+        let tree = table.file_tree(img)?;
+        md5_file_tree(img, &tree, file)?;
     } else {
-        let checksum = md5_file_dirent(img, dirent).await?;
+        let checksum = md5_file_dirent(img, dirent)?;
         println!("{checksum}  {file}");
     }
 
     Ok(())
 }
 
-#[maybe_async]
-async fn md5_from_root_tree<BDR: BlockDeviceRead + ?Sized>(
+fn md5_from_root_tree<BDR: BlockDeviceRead + ?Sized>(
     volume: &xdvdfs::layout::VolumeDescriptor,
     img: &mut BDR,
 ) -> anyhow::Result<()> {
-    let tree = volume.root_table.file_tree(img).await?;
-    md5_file_tree(img, &tree, "").await
+    let tree = volume.root_table.file_tree(img)?;
+    md5_file_tree(img, &tree, "")
 }
 
-#[maybe_async]
-pub async fn cmd_md5(args: &Md5Args) -> Result<(), anyhow::Error> {
-    let mut img = open_image(Path::new(&args.image_path)).await?;
-    let volume = xdvdfs::read::read_volume(img.as_mut()).await?;
+pub fn cmd_md5(args: &Md5Args) -> Result<(), anyhow::Error> {
+    let mut img = open_image(Path::new(&args.image_path))?;
+    let volume = xdvdfs::read::read_volume(img.as_mut())?;
 
     if let Some(path) = &args.path {
-        md5_from_file_path(&volume, img.as_mut(), path).await
+        md5_from_file_path(&volume, img.as_mut(), path)
     } else {
-        md5_from_root_tree(&volume, img.as_mut()).await
+        md5_from_root_tree(&volume, img.as_mut())
     }
 }

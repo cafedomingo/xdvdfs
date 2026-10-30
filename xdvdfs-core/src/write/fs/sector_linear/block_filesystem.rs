@@ -5,11 +5,6 @@ use crate::write::fs::{
     FileEntry, FilesystemCopier, FilesystemHierarchy, PathRef, SectorLinearBlockDevice,
     SectorLinearBlockRegion,
 };
-use alloc::vec::Vec;
-use maybe_async::maybe_async;
-
-#[cfg(not(feature = "sync"))]
-use alloc::boxed::Box;
 
 pub struct SectorLinearBlockFilesystem<F> {
     pub fs: F,
@@ -24,30 +19,28 @@ where
     }
 }
 
-#[maybe_async]
 impl<F> FilesystemHierarchy for SectorLinearBlockFilesystem<F>
 where
     F: FilesystemHierarchy,
 {
     type Error = <F as FilesystemHierarchy>::Error;
 
-    async fn read_dir(&mut self, path: PathRef<'_>) -> Result<Vec<FileEntry>, Self::Error> {
-        self.fs.read_dir(path).await
+    fn read_dir(&mut self, path: PathRef<'_>) -> Result<Vec<FileEntry>, Self::Error> {
+        self.fs.read_dir(path)
     }
 
-    async fn clear_cache(&mut self) -> Result<(), Self::Error> {
-        self.fs.clear_cache().await
+    fn clear_cache(&mut self) -> Result<(), Self::Error> {
+        self.fs.clear_cache()
     }
 }
 
-#[maybe_async]
 impl<F> FilesystemCopier<SectorLinearBlockDevice> for SectorLinearBlockFilesystem<F>
 where
     F: FilesystemCopier<[u8]>,
 {
     type Error = Infallible;
 
-    async fn copy_file_in(
+    fn copy_file_in(
         &mut self,
         src: PathRef<'_>,
         dest: &mut SectorLinearBlockDevice,
@@ -95,12 +88,10 @@ mod test {
 
         let path: PathRef = "/a/b".into();
 
-        futures::executor::block_on(async {
-            assert_eq!(
-                slbfs.copy_file_in(path, &mut slbd, 0, 2048, 5000,).await,
-                Ok(5000)
-            );
-        });
+        assert_eq!(
+            slbfs.copy_file_in(path, &mut slbd, 0, 2048, 5000,),
+            Ok(5000)
+        );
 
         assert_eq!(slbd.get(0), SectorLinearBlockSectorContents::Fill(0));
         assert_eq!(slbd.get(1), SectorLinearBlockSectorContents::File(path));

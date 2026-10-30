@@ -2,16 +2,11 @@ use crate::blockdev::BlockDeviceWrite;
 use crate::layout;
 use crate::write::{fs, sector};
 
-use alloc::vec;
-use alloc::vec::Vec;
-
 use super::dirtab::{
     AvlDirectoryEntryTableBuilder, AvlDirectoryEntryTableWriter, DirtabWriterBuffers,
 };
 use super::fs::{DirectoryTreeEntry, FilesystemCopier, FilesystemHierarchy, PathRef, PathVec};
 use super::{FileStructureError, WriteError};
-
-use maybe_async::maybe_async;
 
 pub use super::progress_info::*;
 
@@ -101,8 +96,7 @@ where
     FS: FilesystemHierarchy + FilesystemCopier<BDW> + ?Sized,
     CB: ProgressVisitor,
 {
-    #[maybe_async]
-    async fn write_volume_descriptor(
+    fn write_volume_descriptor(
         &mut self,
         root_dirtab_size: u32,
         root_dirtab_sector: u32,
@@ -115,18 +109,12 @@ where
             .map_err(|_| FileStructureError::SerializationError)?;
         self.image
             .write(32 * layout::SECTOR_SIZE as u64, &volume_info)
-            .await
             .map_err(WriteError::BlockDeviceError)?;
         Ok(())
     }
 
-    #[maybe_async]
-    async fn apply_image_alignment_padding(&mut self) -> Result<(), GenericWriteError<BDW, FS>> {
-        let len = self
-            .image
-            .len()
-            .await
-            .map_err(WriteError::BlockDeviceError)?;
+    fn apply_image_alignment_padding(&mut self) -> Result<(), GenericWriteError<BDW, FS>> {
+        let len = self.image.len().map_err(WriteError::BlockDeviceError)?;
 
         let aligned = len.next_multiple_of(32 * layout::SECTOR_SIZE as u64);
         let padding = aligned - len;
@@ -136,15 +124,13 @@ where
             let padding = vec![0x00; padding];
             self.image
                 .write(len, &padding)
-                .await
                 .map_err(WriteError::BlockDeviceError)?;
         }
 
         Ok(())
     }
 
-    #[maybe_async]
-    async fn create_image(&mut self) -> Result<(), GenericWriteError<BDW, FS>> {
+    fn create_image(&mut self) -> Result<(), GenericWriteError<BDW, FS>> {
         // The size of a directory entry depends on the size of
         // directory entries inside it (including directory tables).
         // We need to compute the size of all dirent tables before
@@ -157,7 +143,6 @@ where
             self.progress_visitor.directory_discovered(entry_count);
         };
         let dirtree = fs::dir_tree(self.fs, &mut dirtree_count_cb)
-            .await
             .map_err(WriteError::FilesystemHierarchyError)?;
         let DirentTableVec {
             dirent_tables,
@@ -191,7 +176,6 @@ where
                     dirtab_sector * layout::SECTOR_SIZE as u64,
                     &dtw_buffers.dirtab_bytes,
                 )
-                .await
                 .map_err(WriteError::BlockDeviceError)?;
 
             for entry in dirtab.iter() {
@@ -211,24 +195,21 @@ where
                         entry.sector * layout::SECTOR_SIZE as u64,
                         entry.size,
                     )
-                    .await
                     .map_err(WriteError::FilesystemCopierError)?;
             }
         }
 
         self.progress_visitor.finished_copying_image_data();
 
-        self.write_volume_descriptor(root_dirtab_size, root_sector)
-            .await?;
-        self.apply_image_alignment_padding().await?;
+        self.write_volume_descriptor(root_dirtab_size, root_sector)?;
+        self.apply_image_alignment_padding()?;
 
         self.progress_visitor.finished();
         Ok(())
     }
 }
 
-#[maybe_async]
-pub async fn create_xdvdfs_image<
+pub fn create_xdvdfs_image<
     BDW: BlockDeviceWrite + ?Sized,
     FS: FilesystemHierarchy + FilesystemCopier<BDW> + ?Sized,
 >(
@@ -242,16 +223,11 @@ pub async fn create_xdvdfs_image<
         progress_visitor,
     };
 
-    img_writer.create_image().await
+    img_writer.create_image()
 }
 
 #[cfg(test)]
 mod test {
-    use alloc::string::ToString;
-
-    use alloc::vec;
-    use alloc::vec::Vec;
-
     use crate::blockdev::NullBlockDevice;
     use crate::layout;
     use crate::write::dirtab::FileListingEntry;
@@ -444,11 +420,9 @@ mod test {
 
         let mut progress_list = Vec::new();
 
-        let res = futures::executor::block_on(create_xdvdfs_image(
-            &mut memfs,
-            &mut nulldev,
-            |pi: ProgressInfo<'_>| progress_list.push(pi.to_owned()),
-        ));
+        let res = create_xdvdfs_image(&mut memfs, &mut nulldev, |pi: ProgressInfo<'_>| {
+            progress_list.push(pi.to_owned())
+        });
         assert!(res.is_ok());
 
         assert_eq!(
@@ -476,11 +450,7 @@ mod test {
         let mut memfs = MemoryFilesystem::default();
         let mut nulldev = NullBlockDevice::default();
 
-        let res = futures::executor::block_on(create_xdvdfs_image(
-            &mut memfs,
-            &mut nulldev,
-            NoOpProgressVisitor,
-        ));
+        let res = create_xdvdfs_image(&mut memfs, &mut nulldev, NoOpProgressVisitor);
         assert!(res.is_ok());
 
         // Volume info at sector 32
@@ -503,18 +473,14 @@ mod test {
         let mut slbd = SectorLinearBlockDevice::default();
         let mut slbfs = SectorLinearBlockFilesystem::new(memfs);
 
-        let res = futures::executor::block_on(create_xdvdfs_image(
-            &mut slbfs,
-            &mut slbd,
-            NoOpProgressVisitor,
-        ));
+        let res = create_xdvdfs_image(&mut slbfs, &mut slbd, NoOpProgressVisitor);
         assert!(res.is_ok());
 
         assert_eq!(slbd.num_sectors(), 64);
 
         // An empty sector is 0xff filled,
         // whereas padding is 0x00 filled
-        let empty_dirent_sector = alloc::vec![0xff; 2048];
+        let empty_dirent_sector = vec![0xff; 2048];
         assert_eq!(
             slbd.get(63),
             SectorLinearBlockSectorContents::RawData(&empty_dirent_sector)
@@ -531,11 +497,7 @@ mod test {
         let mut slbd = SectorLinearBlockDevice::default();
         let mut slbfs = SectorLinearBlockFilesystem::new(memfs);
 
-        let res = futures::executor::block_on(create_xdvdfs_image(
-            &mut slbfs,
-            &mut slbd,
-            NoOpProgressVisitor,
-        ));
+        let res = create_xdvdfs_image(&mut slbfs, &mut slbd, NoOpProgressVisitor);
         assert!(res.is_ok());
 
         // Check directory tables are written
