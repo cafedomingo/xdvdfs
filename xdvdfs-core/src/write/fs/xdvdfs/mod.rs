@@ -163,15 +163,50 @@ where
                 &mut self.dev,
                 dest,
             )
-            .map_err(|err| match err.kind() {
-                io::ErrorKind::UnexpectedEof => Error::TruncatedFile(src.clone()),
-                kind => io::Error::new(kind, format!("{src}: {err}")).into(),
-            })?;
+            .map_err(|err| read_error(src, err))?;
         if copied < size_to_copy {
             return Err(Error::TruncatedFile(src.clone()));
         }
 
         Ok(copied)
+    }
+}
+
+// `W` is `Sized` here, so this doesn't overlap the impl above when `W` is `[u8]`
+impl<D, W, Copier> FilesystemCopier<[u8]> for XDVDFSFilesystem<D, W, Copier>
+where
+    D: BlockDeviceRead + Sized,
+    W: BlockDeviceWrite,
+    Copier: RWCopier<D, W>,
+{
+    fn copy_file_in(
+        &mut self,
+        src: &ImagePath,
+        dest: &mut [u8],
+        input_offset: u64,
+        output_offset: u64,
+        size: u64,
+    ) -> crate::Result<u64> {
+        let dirent = self.lookup(src)?;
+
+        let size = core::cmp::min(size, dirent.node.dirent.data.size as u64);
+        if size == 0 {
+            return Ok(0);
+        }
+
+        let input_offset = dirent.node.dirent.data.offset(input_offset)?;
+        let dest = &mut dest[output_offset as usize..][..size as usize];
+        self.dev
+            .read(input_offset, dest)
+            .map_err(|err| read_error(src, err))?;
+        Ok(size)
+    }
+}
+
+fn read_error(src: &ImagePath, err: io::Error) -> Error {
+    match err.kind() {
+        io::ErrorKind::UnexpectedEof => Error::TruncatedFile(src.clone()),
+        kind => io::Error::new(kind, format!("{src}: {err}")).into(),
     }
 }
 
