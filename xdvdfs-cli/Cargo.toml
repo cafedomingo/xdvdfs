@@ -18,7 +18,7 @@ exclude = ["**/*.iso", "**/*.xiso"]
 workspace = true
 
 [dependencies]
-xdvdfs = { path = "../xdvdfs-core", version = "0.9.0" }
+xdvdfs = { path = "../xdvdfs-core", version = "1.0.0" }
 clap = { version = "4.6.7", features = ["derive"] }
 md-5 = { version = "0.11.0", default-features = false }
 anyhow = "1.0.104"

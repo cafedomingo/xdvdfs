@@ -138,6 +138,3 @@ fn read_from_path(xiso: &Path, file_path: &str) -> Vec<u8> {
 Custom block devices can be defined by implementing the traits in `xdvdfs::blockdev`, which report failures as `std::io::Error`. Library functions return `xdvdfs::Result`.
 
 The source code for xdvdfs-cli provides a more detailed example of how to use xdvdfs-core.
-
-Note that xdvdfs is currently not API stable, and following semver with major version 0, each minor version bump may or
-may not include breaking changes.

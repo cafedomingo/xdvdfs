@@ -540,7 +540,7 @@ dependencies = [
 
 [[package]]
 name = "xdvdfs"
-version = "0.9.0"
+version = "1.0.0"
 dependencies = [
  "encoding_rs",
  "log",
@@ -553,7 +553,7 @@ dependencies = [
 
 [[package]]
 name = "xdvdfs-cli"
-version = "0.9.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "clap",
