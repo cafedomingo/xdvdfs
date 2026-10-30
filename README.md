@@ -98,7 +98,7 @@ fn read_from_path(xiso: &Path, file_path: &str) -> Vec<u8> {
     let mut xiso = std::fs::File::open(xiso).unwrap();
     let volume = xdvdfs::read::read_volume(&mut xiso).unwrap();
 
-    let file_dirent = volume.root_table.walk_path(&mut xiso, file_path).unwrap();
+    let file_dirent = volume.root_table.walk_path(&mut xiso, &file_path.into()).unwrap();
 
     let mut data = Vec::new();
     file_dirent

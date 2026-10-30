@@ -1,16 +1,15 @@
+use std::collections::BTreeMap;
 use std::io::{self, ErrorKind};
 
 use crate::{
-    write::fs::{
-        path::{PathPrefixTree, PathRef},
-        FileEntry, FileType, FilesystemCopier, FilesystemHierarchy,
-    },
+    write::fs::{FileEntry, FileType, FilesystemCopier, FilesystemHierarchy, ImagePath},
     Error,
 };
 
-#[derive(Default, Debug, Clone)]
-struct Entry {
-    data: Option<Vec<u8>>,
+#[derive(Debug, Clone)]
+enum Entry {
+    Directory,
+    File(Vec<u8>),
 }
 
 fn out_of_bounds(kind: ErrorKind, offset: usize, size: usize, len: usize) -> io::Error {
@@ -21,56 +20,60 @@ fn out_of_bounds(kind: ErrorKind, offset: usize, size: usize, len: usize) -> io:
 }
 
 #[derive(Default, Debug, Clone)]
-pub struct MemoryFilesystem(PathPrefixTree<Entry>);
+pub struct MemoryFilesystem(BTreeMap<ImagePath, Entry>);
 
 impl MemoryFilesystem {
-    pub fn mkdir<'a, P: Into<PathRef<'a>>>(&mut self, path: P) {
-        self.0.insert_path(path, Entry { data: None });
+    pub fn mkdir(&mut self, path: impl Into<ImagePath>) {
+        self.insert(path.into(), Entry::Directory);
     }
 
-    pub fn touch<'a, P: Into<PathRef<'a>>>(&mut self, path: P) {
+    pub fn touch(&mut self, path: impl Into<ImagePath>) {
         self.create(path, &[]);
     }
 
-    pub fn create<'a, P: Into<PathRef<'a>>>(&mut self, path: P, data: &[u8]) {
-        self.0.insert_path(
-            path,
-            Entry {
-                data: Some(data.to_vec()),
-            },
-        );
+    pub fn create(&mut self, path: impl Into<ImagePath>, data: &[u8]) {
+        self.insert(path.into(), Entry::File(data.to_vec()));
     }
 
-    pub fn lsdir<'a, P: Into<PathRef<'a>>>(&self, path: P) -> Option<Vec<FileEntry>> {
-        let dir = self.0.lookup_subdir(path)?;
-        let entries: Vec<FileEntry> = dir
+    /// Inserts `entry` at `path`, and directories at its missing parents
+    fn insert(&mut self, path: ImagePath, entry: Entry) {
+        let mut parent = path.parent();
+        while let Some(dir) = parent.filter(|dir| !dir.is_root()) {
+            parent = dir.parent();
+            self.0.entry(dir).or_insert(Entry::Directory);
+        }
+
+        self.0.insert(path, entry);
+    }
+
+    pub fn lsdir(&self, path: &ImagePath) -> Option<Vec<FileEntry>> {
+        if !path.is_root() && !matches!(self.0.get(path), Some(Entry::Directory)) {
+            return None;
+        }
+
+        let entries = self
+            .0
             .iter()
-            .map(|(name, entry)| FileEntry {
-                name,
-                file_type: match entry.data {
-                    Some(_) => FileType::File,
-                    None => FileType::Directory,
-                },
-                len: entry.data.as_ref().map(|d| d.len() as u64).unwrap_or(0),
+            .filter(|(child, _)| child.parent().as_ref() == Some(path))
+            .map(|(child, entry)| {
+                let (file_type, len) = match entry {
+                    Entry::Directory => (FileType::Directory, 0),
+                    Entry::File(data) => (FileType::File, data.len() as u64),
+                };
+                FileEntry {
+                    name: child.file_name().unwrap_or_default().to_owned(),
+                    file_type,
+                    len,
+                }
             })
             .collect();
         Some(entries)
     }
 
-    fn get_file_data<'a, P: Into<PathRef<'a>>>(&self, path: P) -> Option<&Vec<u8>> {
-        self.0.get(path)?.data.as_ref()
-    }
-
-    pub fn read<'a, P: Into<PathRef<'a>>>(
-        &self,
-        path: P,
-        offset: usize,
-        buffer: &mut [u8],
-    ) -> crate::Result<usize> {
-        let path: PathRef = path.into();
-        let file = self
-            .get_file_data(path)
-            .ok_or_else(|| Error::NotFound(path.into()))?;
+    pub fn read(&self, path: &ImagePath, offset: usize, buffer: &mut [u8]) -> crate::Result<usize> {
+        let Some(Entry::File(file)) = self.0.get(path) else {
+            return Err(Error::NotFound(path.clone()));
+        };
         if offset >= file.len() {
             let (size, len) = (buffer.len(), file.len());
             return Err(out_of_bounds(ErrorKind::UnexpectedEof, offset, size, len).into());
@@ -84,9 +87,9 @@ impl MemoryFilesystem {
         Ok(size)
     }
 
-    fn copy_file_in_impl<'a, P: Into<PathRef<'a>>>(
+    fn copy_file_in_impl(
         &self,
-        src: P,
+        src: &ImagePath,
         dest: &mut [u8],
         input_offset: u64,
         output_offset: u64,
@@ -111,15 +114,16 @@ impl MemoryFilesystem {
 }
 
 impl FilesystemHierarchy for MemoryFilesystem {
-    fn read_dir(&mut self, path: PathRef<'_>) -> crate::Result<Vec<FileEntry>> {
-        self.lsdir(path).ok_or_else(|| Error::NotFound(path.into()))
+    fn read_dir(&mut self, path: &ImagePath) -> crate::Result<Vec<FileEntry>> {
+        self.lsdir(path)
+            .ok_or_else(|| Error::NotFound(path.clone()))
     }
 }
 
 impl FilesystemCopier<[u8]> for MemoryFilesystem {
     fn copy_file_in(
         &mut self,
-        src: PathRef<'_>,
+        src: &ImagePath,
         dest: &mut [u8],
         input_offset: u64,
         output_offset: u64,
@@ -134,14 +138,14 @@ mod test {
     use std::io::ErrorKind;
 
     use crate::{
-        write::fs::{FileEntry, FileType, MemoryFilesystem, PathVec},
+        write::fs::{FileEntry, FileType, ImagePath, MemoryFilesystem},
         Error,
     };
 
     #[test]
     fn test_memfs_lsdir_no_entry() {
         let memfs = MemoryFilesystem::default();
-        assert_eq!(memfs.lsdir("/a"), None);
+        assert_eq!(memfs.lsdir(&"/a".into()), None);
     }
 
     #[test]
@@ -150,7 +154,9 @@ mod test {
         memfs.mkdir("/a/b");
         memfs.mkdir("/a/c");
 
-        let entries = memfs.lsdir("/a").expect("'/a' should contain records");
+        let entries = memfs
+            .lsdir(&"/a".into())
+            .expect("'/a' should contain records");
         assert_eq!(
             entries,
             [
@@ -174,7 +180,9 @@ mod test {
         memfs.create("/a/b", &[0, 1, 2]);
         memfs.create("/a/c", &[3, 4]);
 
-        let entries = memfs.lsdir("/a").expect("'/a' should contain records");
+        let entries = memfs
+            .lsdir(&"/a".into())
+            .expect("'/a' should contain records");
         assert_eq!(
             entries,
             [
@@ -198,7 +206,9 @@ mod test {
         memfs.touch("/a/b");
         memfs.touch("/a/c");
 
-        let entries = memfs.lsdir("/a").expect("'/a' should contain records");
+        let entries = memfs
+            .lsdir(&"/a".into())
+            .expect("'/a' should contain records");
         assert_eq!(
             entries,
             [
@@ -223,7 +233,9 @@ mod test {
         memfs.mkdir("/a/c");
         memfs.create("a/d", &[1]);
 
-        let entries = memfs.lsdir("/a").expect("'/a' should contain records");
+        let entries = memfs
+            .lsdir(&"/a".into())
+            .expect("'/a' should contain records");
         assert_eq!(
             entries,
             [
@@ -250,8 +262,8 @@ mod test {
     fn test_memfs_read_no_entry() {
         let memfs = MemoryFilesystem::default();
         let mut buf = [0; 5];
-        let res = memfs.read("/a", 0, &mut buf);
-        assert!(matches!(res, Err(Error::NotFound(path)) if path == PathVec::from("/a")));
+        let res = memfs.read(&"/a".into(), 0, &mut buf);
+        assert!(matches!(res, Err(Error::NotFound(path)) if path == ImagePath::from("/a")));
     }
 
     #[test]
@@ -260,7 +272,7 @@ mod test {
         memfs.create("/a/b", &[1, 2, 3, 4, 5]);
 
         let mut buf = [0; 5];
-        assert_eq!(memfs.read("/a/b", 0, &mut buf).unwrap(), 5);
+        assert_eq!(memfs.read(&"/a/b".into(), 0, &mut buf).unwrap(), 5);
         assert_eq!(buf, [1, 2, 3, 4, 5]);
     }
 
@@ -270,7 +282,7 @@ mod test {
         memfs.create("/a/b", &[1, 2, 3, 4, 5]);
 
         let mut buf = [0; 5];
-        assert_eq!(memfs.read("/a/b", 2, &mut buf).unwrap(), 3);
+        assert_eq!(memfs.read(&"/a/b".into(), 2, &mut buf).unwrap(), 3);
         assert_eq!(buf, [3, 4, 5, 0, 0]);
     }
 
@@ -280,7 +292,7 @@ mod test {
         memfs.create("/a/b", &[1, 2, 3, 4, 5]);
 
         let mut buf = [0; 5];
-        let res = memfs.read("/a/b", 6, &mut buf);
+        let res = memfs.read(&"/a/b".into(), 6, &mut buf);
         assert!(matches!(res, Err(Error::Io(err)) if err.kind() == ErrorKind::UnexpectedEof));
     }
 
@@ -290,8 +302,8 @@ mod test {
         memfs.mkdir("/a/b");
 
         let mut buf = [0; 5];
-        let res = memfs.read("/a/b", 2, &mut buf);
-        assert!(matches!(res, Err(Error::NotFound(path)) if path == PathVec::from("/a/b")));
+        let res = memfs.read(&"/a/b".into(), 2, &mut buf);
+        assert!(matches!(res, Err(Error::NotFound(path)) if path == ImagePath::from("/a/b")));
     }
 
     #[test]
@@ -301,7 +313,9 @@ mod test {
 
         let mut buf = [0; 5];
         assert_eq!(
-            memfs.copy_file_in_impl("/a/b", &mut buf, 0, 0, 5).unwrap(),
+            memfs
+                .copy_file_in_impl(&"/a/b".into(), &mut buf, 0, 0, 5)
+                .unwrap(),
             5
         );
         assert_eq!(buf, [1, 2, 3, 4, 5]);
@@ -315,7 +329,9 @@ mod test {
         // Read past end of file, extra space filled with 0
         let mut buf = [10; 9];
         assert_eq!(
-            memfs.copy_file_in_impl("/a/b", &mut buf, 0, 2, 7).unwrap(),
+            memfs
+                .copy_file_in_impl(&"/a/b".into(), &mut buf, 0, 2, 7)
+                .unwrap(),
             7
         );
         assert_eq!(buf, [10, 10, 1, 2, 3, 4, 5, 0, 0]);
@@ -327,7 +343,7 @@ mod test {
         memfs.create("/a/b", &[1, 2, 3, 4, 5]);
 
         let mut buf = [0; 5];
-        let res = memfs.copy_file_in_impl("/a/b", &mut buf, 0, 6, 5);
+        let res = memfs.copy_file_in_impl(&"/a/b".into(), &mut buf, 0, 6, 5);
         assert!(matches!(res, Err(Error::Io(err)) if err.kind() == ErrorKind::WriteZero));
     }
 
@@ -339,7 +355,9 @@ mod test {
         // Output offset by 2, input offset by 0, data after EOF is filled 0
         let mut buf = [10; 8];
         assert_eq!(
-            memfs.copy_file_in_impl("/a/b", &mut buf, 0, 2, 7).unwrap(),
+            memfs
+                .copy_file_in_impl(&"/a/b".into(), &mut buf, 0, 2, 7)
+                .unwrap(),
             6
         );
         assert_eq!(buf, [10, 10, 1, 2, 3, 4, 5, 0]);
@@ -353,7 +371,9 @@ mod test {
         // Read is offset by 2, data after EOF is filled 0
         let mut buf = [1; 5];
         assert_eq!(
-            memfs.copy_file_in_impl("/a/b", &mut buf, 2, 0, 5).unwrap(),
+            memfs
+                .copy_file_in_impl(&"/a/b".into(), &mut buf, 2, 0, 5)
+                .unwrap(),
             5
         );
         assert_eq!(buf, [3, 4, 5, 0, 0]);
@@ -365,7 +385,7 @@ mod test {
         memfs.create("/a/b", &[1, 2, 3, 4, 5]);
 
         let mut buf = [0; 5];
-        let res = memfs.copy_file_in_impl("/a/b", &mut buf, 5, 0, 5);
+        let res = memfs.copy_file_in_impl(&"/a/b".into(), &mut buf, 5, 0, 5);
         assert!(matches!(res, Err(Error::Io(err)) if err.kind() == ErrorKind::UnexpectedEof));
     }
 }

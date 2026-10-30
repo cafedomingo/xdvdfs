@@ -282,6 +282,35 @@ fn md5_file_larger_than_one_chunk() {
 }
 
 #[test]
+fn md5_subdirectory_paths() {
+    let work = tempdir().unwrap();
+    let src = work.path().join("src");
+    let img = work.path().join("img.xiso");
+    write_tree(&src, &[("sub/g", b"g"), ("sub/x/f", b"f")], &[]);
+    pack(&src, &img);
+
+    let out = xdvdfs(&["md5".as_ref(), img.as_ref(), "/sub".as_ref()]);
+    assert_success(&out);
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let mut paths: Vec<&str> = stdout
+        .lines()
+        .map(|line| line.split_once("  ").unwrap().1)
+        .collect();
+    paths.sort();
+    assert_eq!(
+        paths,
+        ["/sub/g", "/sub/x", "/sub/x/f"],
+        "md5 printed:\n{stdout}"
+    );
+
+    let nested = format!("{:x}  /sub/x/f", Md5::digest(b"f"));
+    assert!(
+        stdout.lines().any(|line| line == nested),
+        "md5 printed:\n{stdout}"
+    );
+}
+
+#[test]
 fn windows_1252_name_roundtrip() {
     let work = tempdir().unwrap();
     let src = work.path().join("src");
@@ -293,6 +322,15 @@ fn windows_1252_name_roundtrip() {
     assert_success(&ls);
     let listing = String::from_utf8(ls.stdout).unwrap();
     assert!(listing.contains("café.txt"), "ls printed:\n{listing}");
+}
+
+#[test]
+fn pack_name_beyond_ascii() {
+    // `Œ` is U+0152, past a byte, though Windows-1252 encodes it
+    pack_case(
+        &[("x", b"x"), ("Œuvre.txt", b"oeuvre"), ("é.txt", b"e")],
+        &[],
+    );
 }
 
 #[test]

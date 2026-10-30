@@ -1,7 +1,7 @@
 use core::ops::DerefMut;
 use std::collections::VecDeque;
 
-use super::{PathRef, PathVec};
+use super::ImagePath;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum FileType {
@@ -18,7 +18,7 @@ pub struct FileEntry {
 
 #[derive(Clone, Debug)]
 pub struct DirectoryTreeEntry {
-    pub dir: PathVec,
+    pub dir: ImagePath,
     pub listing: Vec<(FileEntry, usize)>,
 }
 
@@ -36,12 +36,12 @@ pub fn dir_tree<FS: FilesystemHierarchy + ?Sized>(
     fs: &mut FS,
     directory_found_callback: &mut impl FnMut(usize),
 ) -> crate::Result<Vec<DirectoryTreeEntry>> {
-    let mut dirs: VecDeque<PathVec> = VecDeque::new();
-    dirs.push_back(PathVec::default());
+    let mut dirs: VecDeque<ImagePath> = VecDeque::new();
+    dirs.push_back(ImagePath::root());
     let mut out = Vec::new();
 
     while let Some(dir) = dirs.pop_front() {
-        let entries = fs.read_dir(dir.as_path_ref())?;
+        let entries = fs.read_dir(&dir)?;
         directory_found_callback(entries.len());
         let mut listing: Vec<(FileEntry, usize)> = Vec::with_capacity(entries.len());
 
@@ -50,7 +50,7 @@ pub fn dir_tree<FS: FilesystemHierarchy + ?Sized>(
         for entry in entries.into_iter() {
             let mut dir_index: usize = 0;
             if let FileType::Directory = entry.file_type {
-                dirs.push_back(PathVec::from_base(dir.clone(), &entry.name));
+                dirs.push_back(dir.join(&entry.name));
 
                 // This directory is in position `dirs.len()` in the queue,
                 // so it will be that many indices past the current directory.
@@ -73,14 +73,7 @@ pub fn dir_tree<FS: FilesystemHierarchy + ?Sized>(
 /// for a list of its entries and entry metadata.
 pub trait FilesystemHierarchy {
     /// Read a directory, and return a list of entries within it
-    fn read_dir(&mut self, path: PathRef<'_>) -> crate::Result<Vec<FileEntry>>;
-
-    /// Clear any cached data built during operation
-    /// After clearing the cache, function should behave as though the object
-    /// has just been initialized.
-    fn clear_cache(&mut self) -> crate::Result<()> {
-        Ok(())
-    }
+    fn read_dir(&mut self, path: &ImagePath) -> crate::Result<Vec<FileEntry>>;
 }
 
 impl<F, FDeref> FilesystemHierarchy for FDeref
@@ -88,30 +81,22 @@ where
     F: FilesystemHierarchy,
     FDeref: DerefMut<Target = F>,
 {
-    fn read_dir(&mut self, path: PathRef<'_>) -> crate::Result<Vec<FileEntry>> {
+    fn read_dir(&mut self, path: &ImagePath) -> crate::Result<Vec<FileEntry>> {
         self.deref_mut().read_dir(path)
-    }
-
-    fn clear_cache(&mut self) -> crate::Result<()> {
-        self.deref_mut().clear_cache()
     }
 }
 
 #[cfg(test)]
 mod test {
-    use crate::write::fs::{FilesystemHierarchy, MemoryFilesystem, PathRef};
+    use crate::write::fs::{FilesystemHierarchy, ImagePath, MemoryFilesystem};
 
     use super::FileEntry;
 
     struct FSContainer<F: FilesystemHierarchy>(F);
 
     impl<F: FilesystemHierarchy> FilesystemHierarchy for FSContainer<F> {
-        fn read_dir(&mut self, path: PathRef<'_>) -> crate::Result<Vec<FileEntry>> {
+        fn read_dir(&mut self, path: &ImagePath) -> crate::Result<Vec<FileEntry>> {
             self.0.read_dir(path)
-        }
-
-        fn clear_cache(&mut self) -> crate::Result<()> {
-            self.0.clear_cache()
         }
     }
 
@@ -123,9 +108,9 @@ mod test {
         let memfs = Box::new(memfs);
         let mut fs = FSContainer(memfs);
 
-        fs.clear_cache().expect("Clearing the cache should succeed");
-
-        let res = fs.read_dir("/".into()).expect("read_dir should succeed");
+        let res = fs
+            .read_dir(&ImagePath::root())
+            .expect("read_dir should succeed");
         assert_eq!(
             res,
             [FileEntry {
@@ -144,9 +129,9 @@ mod test {
         let mut memfs = Box::new(memfs);
         let mut fs = FSContainer(&mut memfs);
 
-        fs.clear_cache().expect("Clearing the cache should succeed");
-
-        let res = fs.read_dir("/".into()).expect("read_dir should succeed");
+        let res = fs
+            .read_dir(&ImagePath::root())
+            .expect("read_dir should succeed");
         assert_eq!(
             res,
             [FileEntry {

@@ -3,6 +3,7 @@ use std::path::Path;
 use clap::Args;
 use xdvdfs::blockdev::BlockDeviceRead;
 use xdvdfs::layout::{DirectoryEntryNode, DirectoryEntryTable, VolumeDescriptor};
+use xdvdfs::write::fs::ImagePath;
 
 #[derive(Args)]
 #[command(
@@ -68,13 +69,13 @@ fn print_dirent(dirent: &DirectoryEntryNode) -> anyhow::Result<()> {
 }
 
 fn print_subdir<BDR: BlockDeviceRead + ?Sized>(
-    path: &str,
+    path: &ImagePath,
     subdir: &DirectoryEntryTable,
     img: &mut BDR,
 ) -> anyhow::Result<()> {
     let children = subdir
         .walk_dirent_tree(img)
-        .map_err(|err| err.in_directory(path))?;
+        .map_err(|err| err.in_directory(path.clone()))?;
     for node in children {
         let name = node.name_str()?;
         println!("{name}");
@@ -92,17 +93,18 @@ pub fn cmd_info(args: &InfoArgs) -> anyhow::Result<()> {
         let mut image = crate::img::open_image(image_path)?;
         let volume = xdvdfs::read::read_volume(image.as_mut())?;
 
-        if path == "/" {
-            print_subdir(path, &volume.root_table, image.as_mut())?;
+        let path = ImagePath::from(path.as_str());
+        if path.is_root() {
+            print_subdir(&path, &volume.root_table, image.as_mut())?;
             return Ok(());
         }
 
-        let dirent = volume.root_table.walk_path(image.as_mut(), path)?;
+        let dirent = volume.root_table.walk_path(image.as_mut(), &path)?;
         print_dirent(&dirent)?;
 
         if let Some(subdir) = dirent.node.dirent.dirent_table() {
             println!();
-            print_subdir(path, &subdir, image.as_mut())?;
+            print_subdir(&path, &subdir, image.as_mut())?;
         }
 
         return Ok(());
