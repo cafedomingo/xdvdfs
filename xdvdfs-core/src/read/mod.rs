@@ -1,4 +1,3 @@
-use alloc::string::String;
 use thiserror::Error;
 
 use crate::layout::{NameDeserializationError, OutOfBounds};

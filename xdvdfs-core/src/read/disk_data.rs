@@ -1,4 +1,3 @@
-use maybe_async::maybe_async;
 use thiserror::Error;
 
 use crate::layout::{DirectoryEntryDiskData, OutOfBounds};
@@ -12,9 +11,12 @@ pub enum DiskDataReadError<E> {
     SizeOutOfBounds(#[from] OutOfBounds),
 }
 
+/// Chunks this large keep reads from being syscall-bound, which they are
+/// with 8 KiB chunks.
+pub const DATA_CHUNK_LEN: usize = 1 << 20;
+
 impl DirectoryEntryDiskData {
-    #[maybe_async]
-    pub async fn read_data<BDR: crate::blockdev::BlockDeviceRead + ?Sized>(
+    pub fn read_data<BDR: crate::blockdev::BlockDeviceRead + ?Sized>(
         &self,
         dev: &mut BDR,
         buf: &mut [u8],
@@ -24,44 +26,32 @@ impl DirectoryEntryDiskData {
         }
 
         let offset = self.data.offset(0)?;
-        dev.read(offset, buf)
-            .await
-            .map_err(DiskDataReadError::IOError)?;
+        dev.read(offset, buf).map_err(DiskDataReadError::IOError)?;
         Ok(())
     }
 
-    #[maybe_async]
-    pub async fn read_data_all<BDR: crate::blockdev::BlockDeviceRead + ?Sized>(
+    /// Reads the data front to back and passes it to `consume` in chunks of at
+    /// most `DATA_CHUNK_LEN` bytes, so memory use doesn't depend on the size
+    /// recorded in the image.
+    pub fn read_data_chunks<BDR: crate::blockdev::BlockDeviceRead + ?Sized>(
         &self,
         dev: &mut BDR,
-    ) -> Result<alloc::boxed::Box<[u8]>, DiskDataReadError<BDR::ReadError>> {
-        self.read_data_offset(dev, self.data.size as u64, 0).await
-    }
-
-    #[maybe_async]
-    pub async fn read_data_offset<BDR: crate::blockdev::BlockDeviceRead + ?Sized>(
-        &self,
-        dev: &mut BDR,
-        size: u64,
-        offset: u64,
-    ) -> Result<alloc::boxed::Box<[u8]>, DiskDataReadError<BDR::ReadError>> {
-        let size = core::cmp::min(size, self.data.size as u64);
-        let buf = alloc::vec![0; size as usize];
-        let mut buf = buf.into_boxed_slice();
-
-        if self.data.size == 0 {
-            return Ok(buf);
+        mut consume: impl FnMut(&[u8]),
+    ) -> Result<(), DiskDataReadError<BDR::ReadError>> {
+        let size = u64::from(self.data.size);
+        let mut chunk = vec![0; size.min(DATA_CHUNK_LEN as u64) as usize];
+        let mut done = 0;
+        while done < size {
+            let len = (size - done).min(chunk.len() as u64) as usize;
+            let offset = self.data.offset(done)?;
+            dev.read(offset, &mut chunk[..len])
+                .map_err(DiskDataReadError::IOError)?;
+            consume(&chunk[..len]);
+            done += len as u64;
         }
-
-        let offset = self.data.offset(offset)?;
-        dev.read(offset, &mut buf)
-            .await
-            .map_err(DiskDataReadError::IOError)?;
-
-        Ok(buf)
+        Ok(())
     }
 
-    #[cfg(feature = "std")]
     pub fn seek_to(
         &self,
         seek: &mut impl std::io::Seek,
@@ -78,8 +68,9 @@ impl DirectoryEntryDiskData {
 
 #[cfg(test)]
 mod test {
+    use super::{DiskDataReadError, DATA_CHUNK_LEN};
+    use crate::blockdev::ByteSliceOutOfBounds;
     use crate::layout::{DirectoryEntryDiskData, DirentAttributes, DiskRegion};
-    use futures::executor;
 
     #[test]
     fn test_layout_dirent_disk_data_read_data_empty() {
@@ -92,7 +83,7 @@ mod test {
         };
 
         let mut buf = [0; 8];
-        executor::block_on(dirent.read_data(data.as_mut_slice(), &mut buf)).unwrap();
+        dirent.read_data(data.as_mut_slice(), &mut buf).unwrap();
 
         assert_eq!(buf, [0; 8]);
     }
@@ -111,74 +102,68 @@ mod test {
         };
 
         let mut buf = [0; 8];
-        executor::block_on(dirent.read_data(data.as_mut_slice(), &mut buf)).unwrap();
+        dirent.read_data(data.as_mut_slice(), &mut buf).unwrap();
 
         assert_eq!(buf, [1; 8]);
     }
 
-    #[test]
-    fn test_layout_dirent_disk_data_read_data_all_empty() {
-        let mut data: [u8; 8] = [1; 8];
-
-        let dirent = DirectoryEntryDiskData {
-            data: DiskRegion { sector: 0, size: 0 },
+    fn dirent(size: u32) -> DirectoryEntryDiskData {
+        DirectoryEntryDiskData {
+            data: DiskRegion { sector: 0, size },
             attributes: DirentAttributes(0),
             filename_length: 0,
-        };
+        }
+    }
 
-        let data = executor::block_on(dirent.read_data_all(data.as_mut_slice())).unwrap();
-        assert_eq!(data.len(), 0);
+    fn read_chunks(
+        dirent: &DirectoryEntryDiskData,
+        image: &mut [u8],
+    ) -> Result<Vec<Vec<u8>>, DiskDataReadError<ByteSliceOutOfBounds>> {
+        let mut chunks = Vec::new();
+        dirent.read_data_chunks(image, |chunk| chunks.push(chunk.to_vec()))?;
+        Ok(chunks)
     }
 
     #[test]
-    fn test_layout_dirent_disk_data_read_data_all_non_empty() {
-        let mut data: [u8; 8] = [1; 8];
-
-        let dirent = DirectoryEntryDiskData {
-            data: DiskRegion { sector: 0, size: 8 },
-            attributes: DirentAttributes(0),
-            filename_length: 0,
-        };
-
-        let data = executor::block_on(dirent.read_data_all(data.as_mut_slice())).unwrap();
-        assert_eq!(data.as_ref(), &[1; 8]);
+    fn test_layout_dirent_disk_data_read_data_chunks_empty() {
+        let chunks = read_chunks(&dirent(0), &mut [1; 8]).unwrap();
+        assert!(chunks.is_empty());
     }
 
     #[test]
-    fn test_layout_dirent_disk_data_read_data_offset_empty() {
-        let mut data: [u8; 8] = [1; 8];
-
-        let dirent = DirectoryEntryDiskData {
-            data: DiskRegion { sector: 0, size: 0 },
-            attributes: DirentAttributes(0),
-            filename_length: 0,
-        };
-
-        let data = executor::block_on(dirent.read_data_offset(data.as_mut_slice(), 4, 2))
-            .expect("Data should be read without error");
-        assert_eq!(data.len(), 0);
+    fn test_layout_dirent_disk_data_read_data_chunks_small() {
+        let chunks = read_chunks(&dirent(5), &mut [1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
+        assert_eq!(chunks, [[1, 2, 3, 4, 5]]);
     }
 
     #[test]
-    fn test_layout_dirent_disk_data_read_data_offset_non_empty() {
-        let mut data: [u8; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+    fn test_layout_dirent_disk_data_read_data_chunks_multiple() {
+        let size = 2 * DATA_CHUNK_LEN + 13;
+        let mut image: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
 
-        let dirent = DirectoryEntryDiskData {
-            data: DiskRegion { sector: 0, size: 8 },
-            attributes: DirentAttributes(0),
-            filename_length: 0,
-        };
+        let chunks = read_chunks(&dirent(size as u32), &mut image).unwrap();
+        let lens: Vec<_> = chunks.iter().map(Vec::len).collect();
+        assert_eq!(lens, [DATA_CHUNK_LEN, DATA_CHUNK_LEN, 13]);
+        assert_eq!(chunks.concat(), image);
+    }
 
-        let data = executor::block_on(dirent.read_data_offset(data.as_mut_slice(), 4, 2))
-            .expect("Data should be read without error");
-        assert_eq!(data.as_ref(), &[3, 4, 5, 6]);
+    #[test]
+    fn test_layout_dirent_disk_data_read_data_chunks_truncated_image() {
+        let mut image = vec![1; DATA_CHUNK_LEN + 5];
+
+        let mut consumed = 0;
+        let res =
+            dirent(2 * DATA_CHUNK_LEN as u32).read_data_chunks(image.as_mut_slice(), |chunk| {
+                consumed += chunk.len();
+            });
+        assert!(res.is_err());
+        assert_eq!(consumed, DATA_CHUNK_LEN);
     }
 }
 
-#[cfg(all(test, feature = "std"))]
+#[cfg(test)]
 mod test_std {
     use crate::layout::{DirectoryEntryDiskData, DirentAttributes, DiskRegion};
-    use alloc::vec::Vec;
     use std::io::Cursor;
 
     #[test]

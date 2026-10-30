@@ -79,8 +79,6 @@ impl<'a> Display for PathCow<'a> {
 
 #[cfg(test)]
 mod test {
-    use alloc::string::ToString;
-
     use crate::write::fs::{PathCow, PathRef, PathVec};
 
     #[test]

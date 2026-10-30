@@ -1,6 +1,5 @@
 use crate::img::open_image;
 use clap::Args;
-use maybe_async::maybe_async;
 use std::path::Path;
 
 #[derive(Args)]
@@ -20,18 +19,16 @@ pub struct LsArgs {
     scan: bool,
 }
 
-#[maybe_async]
-pub async fn cmd_ls(args: &LsArgs) -> anyhow::Result<()> {
-    let mut img = open_image(Path::new(&args.image_path)).await?;
-    let volume = xdvdfs::read::read_volume(img.as_mut()).await?;
+pub fn cmd_ls(args: &LsArgs) -> anyhow::Result<()> {
+    let mut img = open_image(Path::new(&args.image_path))?;
+    let volume = xdvdfs::read::read_volume(img.as_mut())?;
 
     let dirent_table = if args.path == "/" {
         volume.root_table
     } else {
         volume
             .root_table
-            .walk_path(img.as_mut(), &args.path)
-            .await?
+            .walk_path(img.as_mut(), &args.path)?
             .node
             .dirent
             .dirent_table()
@@ -39,9 +36,9 @@ pub async fn cmd_ls(args: &LsArgs) -> anyhow::Result<()> {
     };
 
     if args.scan {
-        let mut iter = dirent_table.scan_dirent_tree(img.as_mut()).await?;
+        let mut iter = dirent_table.scan_dirent_tree(img.as_mut())?;
 
-        while let Some(dirent) = iter.next_entry().await? {
+        while let Some(dirent) = iter.next_entry()? {
             let name = dirent.name_str()?;
             println!("{name}");
         }
@@ -49,7 +46,7 @@ pub async fn cmd_ls(args: &LsArgs) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let listing = dirent_table.walk_dirent_tree(img.as_mut()).await?;
+    let listing = dirent_table.walk_dirent_tree(img.as_mut())?;
 
     for dirent in listing {
         let name = dirent.name_str()?;
@@ -66,12 +63,11 @@ pub struct TreeArgs {
     pub image_path: String,
 }
 
-#[maybe_async]
-pub async fn cmd_tree(args: &TreeArgs) -> anyhow::Result<()> {
-    let mut img = open_image(Path::new(&args.image_path)).await?;
-    let volume = xdvdfs::read::read_volume(img.as_mut()).await?;
+pub fn cmd_tree(args: &TreeArgs) -> anyhow::Result<()> {
+    let mut img = open_image(Path::new(&args.image_path))?;
+    let volume = xdvdfs::read::read_volume(img.as_mut())?;
 
-    let tree = volume.root_table.file_tree(img.as_mut()).await?;
+    let tree = volume.root_table.file_tree(img.as_mut())?;
 
     let mut total_size: usize = 0;
     let mut file_count: usize = 0;
@@ -109,11 +105,10 @@ pub struct ChecksumArgs {
     silent: bool,
 }
 
-#[maybe_async]
-async fn checksum_single(img_path: &str) -> anyhow::Result<()> {
-    let mut img = open_image(Path::new(img_path)).await?;
-    let volume = xdvdfs::read::read_volume(img.as_mut()).await?;
-    let checksum = xdvdfs::checksum::checksum(img.as_mut(), &volume).await?;
+fn checksum_single(img_path: &str) -> anyhow::Result<()> {
+    let mut img = open_image(Path::new(img_path))?;
+    let volume = xdvdfs::read::read_volume(img.as_mut())?;
+    let checksum = xdvdfs::checksum::checksum(img.as_mut(), &volume)?;
 
     for byte in checksum {
         print!("{byte:02x}");
@@ -123,8 +118,7 @@ async fn checksum_single(img_path: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[maybe_async]
-pub async fn cmd_checksum(args: &ChecksumArgs) -> anyhow::Result<()> {
+pub fn cmd_checksum(args: &ChecksumArgs) -> anyhow::Result<()> {
     if !args.silent {
         eprintln!("This SHA256 sum is a condensed checksum of the all the data inside the image");
         eprintln!("It does not encode information about the filesystem structure outside of the data being in the correct order.");
@@ -136,7 +130,7 @@ pub async fn cmd_checksum(args: &ChecksumArgs) -> anyhow::Result<()> {
     }
 
     for image in &args.images {
-        checksum_single(image).await?;
+        checksum_single(image)?;
     }
 
     Ok(())

@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context};
 use clap::Args;
-use maybe_async::maybe_async;
 use xdvdfs::write::{
     fs::{StdFilesystem, StdIOCopier, XDVDFSFilesystem},
     img::create_xdvdfs_image,
@@ -83,8 +82,7 @@ fn output_path(image_path: &Path) -> PathBuf {
     std::fs::canonicalize(image_path).unwrap_or_else(|_| image_path.with_file_name(target))
 }
 
-#[maybe_async]
-pub async fn cmd_pack(args: &PackArgs) -> Result<(), anyhow::Error> {
+pub fn cmd_pack(args: &PackArgs) -> Result<(), anyhow::Error> {
     let source_path = absolute_path(Path::new(&args.source_path))?;
     let meta = std::fs::metadata(&source_path)?;
     let is_dir = meta.is_dir();
@@ -96,18 +94,17 @@ pub async fn cmd_pack(args: &PackArgs) -> Result<(), anyhow::Error> {
         .map(Ok)
         .unwrap_or_else(|| default_image_path(&source_path, is_dir, "iso"))?;
 
-    cmd_pack_path(&source_path, &image_path).await
+    cmd_pack_path(&source_path, &image_path)
 }
 
-#[maybe_async]
-pub async fn cmd_pack_path(source_path: &Path, image_path: &Path) -> Result<(), anyhow::Error> {
+pub fn cmd_pack_path(source_path: &Path, image_path: &Path) -> Result<(), anyhow::Error> {
     let image_path = output_path(image_path);
     let partial_path = image_path.with_added_extension("partial");
     for path in [&image_path, &partial_path] {
         check_image_path(source_path, path)?;
     }
 
-    pack_into(source_path, &partial_path).await?;
+    pack_into(source_path, &partial_path)?;
     if let Err(err) = std::fs::rename(&partial_path, &image_path) {
         let _ = std::fs::remove_file(&partial_path);
         return Err(err).with_context(|| format!("Failed to replace {}", image_path.display()));
@@ -118,9 +115,8 @@ pub async fn cmd_pack_path(source_path: &Path, image_path: &Path) -> Result<(), 
 
 /// Packs `source_path` into a new file at `image_path`, and removes that file
 /// if packing fails.
-#[maybe_async]
-pub async fn pack_into(source_path: &Path, image_path: &Path) -> Result<(), anyhow::Error> {
-    let result = write_image(source_path, image_path).await;
+pub fn pack_into(source_path: &Path, image_path: &Path) -> Result<(), anyhow::Error> {
+    let result = write_image(source_path, image_path);
     if result.is_err() {
         // The packing error is the one to report
         let _ = std::fs::remove_file(image_path);
@@ -129,8 +125,7 @@ pub async fn pack_into(source_path: &Path, image_path: &Path) -> Result<(), anyh
     result
 }
 
-#[maybe_async]
-async fn write_image(source_path: &Path, image_path: &Path) -> Result<(), anyhow::Error> {
+fn write_image(source_path: &Path, image_path: &Path) -> Result<(), anyhow::Error> {
     let meta = std::fs::metadata(source_path)?;
     let is_dir = meta.is_dir();
 
@@ -140,13 +135,12 @@ async fn write_image(source_path: &Path, image_path: &Path) -> Result<(), anyhow
     let progress_visitor = StdIoProgressReporter::new(source_path, is_dir);
     if is_dir {
         let mut fs = StdFilesystem::create(source_path);
-        create_xdvdfs_image(&mut fs, &mut image, progress_visitor).await?;
+        create_xdvdfs_image(&mut fs, &mut image, progress_visitor)?;
     } else if meta.is_file() {
-        let source = crate::img::open_image_raw(source_path).await?;
+        let source = crate::img::open_image_raw(source_path)?;
         let mut fs = XDVDFSFilesystem::<_, _, StdIOCopier<_, _>>::new(source)
-            .await
             .ok_or(anyhow::anyhow!("Failed to create XDVDFS filesystem"))?;
-        create_xdvdfs_image(&mut fs, &mut image, progress_visitor).await?;
+        create_xdvdfs_image(&mut fs, &mut image, progress_visitor)?;
     } else {
         bail!("Source must be a directory or an image file");
     }

@@ -1,5 +1,3 @@
-use alloc::boxed::Box;
-
 use crate::write::fs::PathRef;
 
 mod subtree;

@@ -34,7 +34,6 @@ impl Display for PathRef<'_> {
 #[cfg(test)]
 mod test {
     use crate::write::fs::path::PathRef;
-    use alloc::string::ToString;
 
     #[test]
     fn test_pathref_display_str_root() {

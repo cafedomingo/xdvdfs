@@ -71,8 +71,6 @@ mod test {
 
     #[test]
     fn test_layout_attributes_display() {
-        use alloc::string::ToString;
-
         assert_eq!(DirentAttributes(1 << 0).to_string(), "Read-Only");
         assert_eq!(DirentAttributes(1 << 1).to_string(), "Hidden");
         assert_eq!(DirentAttributes(1 << 2).to_string(), "System");

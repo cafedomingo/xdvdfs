@@ -1,4 +1,4 @@
-use alloc::collections::BTreeMap;
+use std::collections::BTreeMap;
 
 use crate::layout::{DirectoryEntryTable, SECTOR_SIZE};
 

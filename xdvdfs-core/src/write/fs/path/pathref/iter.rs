@@ -105,8 +105,6 @@ impl FusedIterator for PathRefIter<'_> {}
 
 #[cfg(test)]
 mod test {
-    use alloc::vec::Vec;
-
     use crate::write::fs::path::PathRef;
 
     #[test]

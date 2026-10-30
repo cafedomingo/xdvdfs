@@ -2,10 +2,6 @@ use core::fmt::Display;
 use core::iter::Filter;
 use core::str::Split;
 
-use alloc::borrow::ToOwned;
-use alloc::string::String;
-use alloc::vec::Vec;
-
 use super::PathRef;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -120,14 +116,12 @@ impl PathVec {
 #[cfg(test)]
 mod test {
     use super::PathVec;
-    use alloc::borrow::ToOwned;
 
     #[test]
     fn test_pathvec_from_iter() {
         let path = &["hello", "world"];
         let path = PathVec::from_iter(path.iter().copied());
-        let components: alloc::vec::Vec<alloc::string::String> =
-            path.iter().map(|x| x.to_owned()).collect();
+        let components: Vec<String> = path.iter().map(|x| x.to_owned()).collect();
 
         assert_eq!(components, &["hello", "world",]);
     }
@@ -136,8 +130,7 @@ mod test {
     fn test_pathvec_into_iterator() {
         let path = &["hello", "world"];
         let path = PathVec::from_iter(path.iter().copied());
-        let components: alloc::vec::Vec<alloc::string::String> =
-            path.into_iter().map(|x| x.to_owned()).collect();
+        let components: Vec<String> = path.into_iter().map(|x| x.to_owned()).collect();
 
         assert_eq!(components, &["hello", "world",]);
     }
@@ -146,8 +139,7 @@ mod test {
     fn test_pathvec_from_str() {
         let path = "/hello/world";
         let path = PathVec::from(path);
-        let components: alloc::vec::Vec<alloc::string::String> =
-            path.iter().map(|x| x.to_owned()).collect();
+        let components: Vec<String> = path.iter().map(|x| x.to_owned()).collect();
 
         assert_eq!(components, &["hello", "world",]);
     }
@@ -201,8 +193,6 @@ mod test {
 
     #[test]
     fn test_pathvec_to_string() {
-        use alloc::string::ToString;
-
         let root = PathVec::default();
         let path = PathVec::from_base(root, "hello");
         let path = PathVec::from_base(path, "world");
@@ -212,8 +202,6 @@ mod test {
 
     #[test]
     fn test_pathvec_to_string_root() {
-        use alloc::string::ToString;
-
         let root = PathVec::default();
         assert_eq!(root.to_string(), "/");
     }

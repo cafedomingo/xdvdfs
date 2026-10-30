@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context};
 use clap::{ArgAction, Parser, Subcommand};
-use maybe_async::maybe_async;
 
 use crate::img::absolute_path;
 
@@ -77,8 +76,7 @@ pub struct EXCommand {
     mode: EXMode,
 }
 
-#[maybe_async]
-async fn exiso_create_single(dir: &String, file: &Option<String>) -> anyhow::Result<()> {
+fn exiso_create_single(dir: &String, file: &Option<String>) -> anyhow::Result<()> {
     let dir = absolute_path(Path::new(dir))?;
     let meta = std::fs::metadata(&dir)?;
     if !meta.is_dir() {
@@ -91,11 +89,10 @@ async fn exiso_create_single(dir: &String, file: &Option<String>) -> anyhow::Res
         .unwrap_or_else(|| dir.with_extension("iso"));
 
     use crate::cmd_pack::*;
-    cmd_pack_path(&dir, &image_path).await
+    cmd_pack_path(&dir, &image_path)
 }
 
-#[maybe_async]
-async fn exiso_create(dir: &String, file: &Option<String>, rest: &[String]) -> anyhow::Result<()> {
+fn exiso_create(dir: &String, file: &Option<String>, rest: &[String]) -> anyhow::Result<()> {
     let mut tasks = Vec::new();
     tasks.push((dir, file.clone()));
 
@@ -125,41 +122,36 @@ async fn exiso_create(dir: &String, file: &Option<String>, rest: &[String]) -> a
     }
 
     for (dir, file) in tasks {
-        exiso_create_single(dir, &file).await?;
+        exiso_create_single(dir, &file)?;
     }
 
     Ok(())
 }
 
-#[maybe_async]
-async fn exiso_list(xiso_list: &Vec<String>) -> anyhow::Result<()> {
+fn exiso_list(xiso_list: &Vec<String>) -> anyhow::Result<()> {
     use crate::cmd_read::{cmd_tree, TreeArgs};
     for xiso in xiso_list {
         cmd_tree(&TreeArgs {
             image_path: xiso.clone(),
-        })
-        .await?;
+        })?;
     }
 
     Ok(())
 }
 
-#[maybe_async]
-async fn exiso_extract(xiso_list: &Vec<String>, directory: &Option<String>) -> anyhow::Result<()> {
+fn exiso_extract(xiso_list: &Vec<String>, directory: &Option<String>) -> anyhow::Result<()> {
     use crate::cmd_unpack::{cmd_unpack, UnpackArgs};
     for xiso in xiso_list {
         cmd_unpack(&UnpackArgs {
             image_path: xiso.clone(),
             path: directory.clone(),
-        })
-        .await?;
+        })?;
     }
 
     Ok(())
 }
 
-#[maybe_async]
-async fn exiso_repack(
+fn exiso_repack(
     xiso_list: &Vec<String>,
     directory: &Option<String>,
     delete: bool,
@@ -187,7 +179,7 @@ async fn exiso_repack(
 
         // Packing first leaves the input untouched if it isn't an image
         let partial_path = dest_path.with_added_extension("partial");
-        pack_into(&source_path, &partial_path).await?;
+        pack_into(&source_path, &partial_path)?;
         if let Err(err) = std::fs::rename(&source_path, &backup_path) {
             let _ = std::fs::remove_file(&partial_path);
             return Err(err).with_context(|| {
@@ -208,19 +200,18 @@ async fn exiso_repack(
     Ok(())
 }
 
-#[maybe_async]
-pub async fn run_exiso_command(cmd: &EXCommand) -> anyhow::Result<()> {
+pub fn run_exiso_command(cmd: &EXCommand) -> anyhow::Result<()> {
     // FIXME: Respect -q and -Q during processing
     match &cmd.mode {
-        EXMode::C { dir, file, rest } => exiso_create(dir, file, rest).await,
-        EXMode::L { xiso } => exiso_list(xiso).await,
-        EXMode::X { xiso } | EXMode::None(xiso) => exiso_extract(xiso, &cmd.directory).await,
-        EXMode::R { xiso } => exiso_repack(xiso, &cmd.directory, cmd.delete).await,
+        EXMode::C { dir, file, rest } => exiso_create(dir, file, rest),
+        EXMode::L { xiso } => exiso_list(xiso),
+        EXMode::X { xiso } | EXMode::None(xiso) => exiso_extract(xiso, &cmd.directory),
+        EXMode::R { xiso } => exiso_repack(xiso, &cmd.directory, cmd.delete),
     }
 }
 
 pub fn run_exiso_program(cmd: &EXCommand) -> anyhow::Result<()> {
-    let res = crate::executor::run_with_executor!(run_exiso_command, cmd);
+    let res = run_exiso_command(cmd);
 
     if !cmd.quiet_error && !cmd.quiet_all {
         res

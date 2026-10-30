@@ -1,5 +1,4 @@
 use ciso::read::CSOReader;
-use maybe_async::maybe_async;
 use std::{
     fs::File,
     io::BufReader,
@@ -11,33 +10,27 @@ pub struct CSOBlockDevice<R: ciso::read::Read<ReadError = std::io::Error>> {
     inner: CSOReader<std::io::Error, R>,
 }
 
-#[maybe_async]
 impl<R> BlockDeviceRead for CSOBlockDevice<R>
 where
     R: ciso::read::Read<ReadError = std::io::Error>,
 {
     type ReadError = std::io::Error;
 
-    async fn read(&mut self, offset: u64, buffer: &mut [u8]) -> Result<(), std::io::Error> {
-        self.inner
-            .read_offset(offset, buffer)
-            .await
-            .map_err(|e| match e {
-                ciso::layout::Error::Other(e) => e,
-                e => std::io::Error::other(e),
-            })
+    fn read(&mut self, offset: u64, buffer: &mut [u8]) -> Result<(), std::io::Error> {
+        self.inner.read_offset(offset, buffer).map_err(|e| match e {
+            ciso::layout::Error::Other(e) => e,
+            e => std::io::Error::other(e),
+        })
     }
 }
 
-#[maybe_async]
-pub async fn open_image_raw(path: &Path) -> Result<OffsetWrapper<BufReader<File>>, anyhow::Error> {
+pub fn open_image_raw(path: &Path) -> Result<OffsetWrapper<BufReader<File>>, anyhow::Error> {
     let img = File::options().read(true).open(path)?;
     let img = std::io::BufReader::new(img);
-    Ok(xdvdfs::blockdev::OffsetWrapper::new(img).await?)
+    Ok(xdvdfs::blockdev::OffsetWrapper::new(img)?)
 }
 
-#[maybe_async]
-pub async fn open_image(
+pub fn open_image(
     path: &Path,
 ) -> Result<Box<dyn BlockDeviceRead<ReadError = std::io::Error>>, anyhow::Error> {
     if path.extension().is_some_and(|e| e == "cso") {
@@ -60,17 +53,17 @@ pub async fn open_image(
                 return Err(anyhow::anyhow!("Failed to open file {:?}", path));
             }
 
-            Box::from(ciso::split::SplitFileReader::new(files).await?)
+            Box::from(ciso::split::SplitFileReader::new(files)?)
         } else {
             let file = std::io::BufReader::new(std::fs::File::open(path)?);
             Box::from(file)
         };
 
-        let reader = ciso::read::CSOReader::new(reader).await?;
+        let reader = ciso::read::CSOReader::new(reader)?;
         let reader = Box::from(CSOBlockDevice { inner: reader });
         Ok(reader)
     } else {
-        let image = open_image_raw(path).await?;
+        let image = open_image_raw(path)?;
         let image = Box::from(image);
         Ok(image)
     }

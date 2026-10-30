@@ -1,11 +1,6 @@
 use core::convert::Infallible;
 
-use alloc::vec::Vec;
-use maybe_async::maybe_async;
 use thiserror::Error;
-
-#[cfg(not(feature = "sync"))]
-use alloc::boxed::Box;
 
 use crate::{
     blockdev::NullBlockDevice,
@@ -94,7 +89,6 @@ impl MemoryFilesystem {
         Ok(size)
     }
 
-    // Split out impl into sync function for testing
     fn copy_file_in_impl<'a, P: Into<PathRef<'a>>>(
         &self,
         src: P,
@@ -124,21 +118,19 @@ impl MemoryFilesystem {
 #[error("path \"{0}\" does not exist")]
 pub struct PathDoesNotExist(PathVec);
 
-#[maybe_async]
 impl FilesystemHierarchy for MemoryFilesystem {
     type Error = PathDoesNotExist;
 
-    async fn read_dir(&mut self, path: PathRef<'_>) -> Result<Vec<FileEntry>, Self::Error> {
+    fn read_dir(&mut self, path: PathRef<'_>) -> Result<Vec<FileEntry>, Self::Error> {
         self.lsdir(path)
             .ok_or_else(|| PathDoesNotExist(path.into()))
     }
 }
 
-#[maybe_async]
 impl FilesystemCopier<[u8]> for MemoryFilesystem {
     type Error = FileReadError;
 
-    async fn copy_file_in(
+    fn copy_file_in(
         &mut self,
         src: PathRef<'_>,
         dest: &mut [u8],
@@ -150,11 +142,10 @@ impl FilesystemCopier<[u8]> for MemoryFilesystem {
     }
 }
 
-#[maybe_async]
 impl FilesystemCopier<NullBlockDevice> for MemoryFilesystem {
     type Error = Infallible;
 
-    async fn copy_file_in(
+    fn copy_file_in(
         &mut self,
         _src: PathRef<'_>,
         dest: &mut NullBlockDevice,
@@ -169,8 +160,6 @@ impl FilesystemCopier<NullBlockDevice> for MemoryFilesystem {
 
 #[cfg(test)]
 mod test {
-    use alloc::string::ToString;
-
     use crate::write::fs::{FileEntry, FileReadError, FileType, MemoryFilesystem};
 
     #[test]

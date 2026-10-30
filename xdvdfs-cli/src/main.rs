@@ -1,5 +1,4 @@
 use clap::Parser;
-use maybe_async::maybe_async;
 
 mod cmd_compress;
 mod cmd_info;
@@ -7,7 +6,6 @@ mod cmd_md5;
 mod cmd_pack;
 mod cmd_read;
 mod cmd_unpack;
-mod executor;
 mod img;
 mod progress;
 
@@ -53,29 +51,20 @@ enum Cmd {
     ExtractXiso(exiso_compat::EXCommand),
 }
 
-#[maybe_async]
-async fn run_command(cmd: &Cmd) -> Result<(), anyhow::Error> {
+fn run_command(cmd: &Cmd) -> Result<(), anyhow::Error> {
     use Cmd::*;
     match cmd {
-        Ls(args) => cmd_read::cmd_ls(args).await,
-        Tree(args) => cmd_read::cmd_tree(args).await,
-        Md5(args) => cmd_md5::cmd_md5(args).await,
-        Checksum(args) => cmd_read::cmd_checksum(args).await,
-        Info(args) => cmd_info::cmd_info(args).await,
-        CopyOut(args) => cmd_unpack::cmd_copyout(args).await,
-        Unpack(args) => cmd_unpack::cmd_unpack(args).await,
-        Pack(args) => cmd_pack::cmd_pack(args).await,
-        Compress(args) => cmd_compress::cmd_compress(args).await,
-        ExtractXiso(_) => unreachable!("should be handled before entering async context"),
+        Ls(args) => cmd_read::cmd_ls(args),
+        Tree(args) => cmd_read::cmd_tree(args),
+        Md5(args) => cmd_md5::cmd_md5(args),
+        Checksum(args) => cmd_read::cmd_checksum(args),
+        Info(args) => cmd_info::cmd_info(args),
+        CopyOut(args) => cmd_unpack::cmd_copyout(args),
+        Unpack(args) => cmd_unpack::cmd_unpack(args),
+        Pack(args) => cmd_pack::cmd_pack(args),
+        Compress(args) => cmd_compress::cmd_compress(args),
+        ExtractXiso(args) => exiso_compat::run_exiso_program(args),
     }
-}
-
-fn run_xdvdfs_program(cmd: &Cmd) -> anyhow::Result<()> {
-    if let Cmd::ExtractXiso(exiso_cmd) = cmd {
-        return exiso_compat::run_exiso_program(exiso_cmd);
-    }
-
-    executor::run_with_executor!(run_command, &cmd)
 }
 
 fn main() -> anyhow::Result<()> {
@@ -83,8 +72,8 @@ fn main() -> anyhow::Result<()> {
 
     let tlc = TopLevelCommand::parse();
     match &tlc {
-        TopLevelCommand::Core(cli) => run_xdvdfs_program(cli),
+        TopLevelCommand::Core(cli) => run_command(cli),
         TopLevelCommand::ExtractXiso(cmd) => exiso_compat::run_exiso_program(cmd),
-        TopLevelCommand::External(_) => run_xdvdfs_program(&Cmd::parse()),
+        TopLevelCommand::External(_) => run_command(&Cmd::parse()),
     }
 }

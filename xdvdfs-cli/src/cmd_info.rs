@@ -1,7 +1,6 @@
 use std::path::Path;
 
 use clap::Args;
-use maybe_async::maybe_async;
 use xdvdfs::blockdev::BlockDeviceRead;
 use xdvdfs::layout::{DirectoryEntryNode, DirectoryEntryTable, VolumeDescriptor};
 
@@ -68,12 +67,11 @@ fn print_dirent(dirent: &DirectoryEntryNode) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[maybe_async]
-async fn print_subdir<BDR: BlockDeviceRead<ReadError = std::io::Error> + ?Sized>(
+fn print_subdir<BDR: BlockDeviceRead<ReadError = std::io::Error> + ?Sized>(
     subdir: &DirectoryEntryTable,
     img: &mut BDR,
 ) -> anyhow::Result<()> {
-    let children = subdir.walk_dirent_tree(img).await?;
+    let children = subdir.walk_dirent_tree(img)?;
     for node in children {
         let name = node.name_str()?;
         println!("{name}");
@@ -84,36 +82,35 @@ async fn print_subdir<BDR: BlockDeviceRead<ReadError = std::io::Error> + ?Sized>
     Ok(())
 }
 
-#[maybe_async]
-pub async fn cmd_info(args: &InfoArgs) -> anyhow::Result<()> {
+pub fn cmd_info(args: &InfoArgs) -> anyhow::Result<()> {
     let image_path = Path::new(&args.image_path);
 
     if let Some(path) = &args.file_entry {
-        let mut image = crate::img::open_image(image_path).await?;
-        let volume = xdvdfs::read::read_volume(image.as_mut()).await?;
+        let mut image = crate::img::open_image(image_path)?;
+        let volume = xdvdfs::read::read_volume(image.as_mut())?;
 
         if path == "/" {
-            print_subdir(&volume.root_table, image.as_mut()).await?;
+            print_subdir(&volume.root_table, image.as_mut())?;
             return Ok(());
         }
 
-        let dirent = volume.root_table.walk_path(image.as_mut(), path).await?;
+        let dirent = volume.root_table.walk_path(image.as_mut(), path)?;
         print_dirent(&dirent)?;
 
         if let Some(subdir) = dirent.node.dirent.dirent_table() {
             println!();
-            print_subdir(&subdir, image.as_mut()).await?;
+            print_subdir(&subdir, image.as_mut())?;
         }
 
         return Ok(());
     }
 
     let volume = if image_path.extension().is_some_and(|e| e == "cso") {
-        let mut image = crate::img::open_image(image_path).await?;
+        let mut image = crate::img::open_image(image_path)?;
         println!("{:<20} CISO", "Image type:");
-        xdvdfs::read::read_volume(image.as_mut()).await?
+        xdvdfs::read::read_volume(image.as_mut())?
     } else {
-        let mut image = crate::img::open_image_raw(image_path).await?;
+        let mut image = crate::img::open_image_raw(image_path)?;
         let xgd_type = image.get_offset();
 
         println!(
@@ -123,7 +120,7 @@ pub async fn cmd_info(args: &InfoArgs) -> anyhow::Result<()> {
             u64::from(xgd_type)
         );
 
-        xdvdfs::read::read_volume(&mut image).await?
+        xdvdfs::read::read_volume(&mut image)?
     };
 
     print_volume(&volume);

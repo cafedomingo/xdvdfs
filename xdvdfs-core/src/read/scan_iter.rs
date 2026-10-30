@@ -3,7 +3,6 @@ use crate::layout::{
     DirectoryEntryNode, DirectoryEntryTable, SECTOR_SIZE, SECTOR_SIZE_U64, SECTOR_SIZE_USZ,
 };
 use crate::read::DirectoryEntryReadError;
-use maybe_async::maybe_async;
 
 pub struct DirentScanIter<'a, BDR: BlockDeviceRead + ?Sized> {
     sector: usize,
@@ -14,8 +13,7 @@ pub struct DirentScanIter<'a, BDR: BlockDeviceRead + ?Sized> {
 }
 
 impl<BDR: BlockDeviceRead + ?Sized> DirentScanIter<'_, BDR> {
-    #[maybe_async]
-    async fn next_sector(&mut self) -> Result<(), BDR::ReadError> {
+    fn next_sector(&mut self) -> Result<(), BDR::ReadError> {
         self.offset = 0;
         self.sector += 1;
 
@@ -25,14 +23,12 @@ impl<BDR: BlockDeviceRead + ?Sized> DirentScanIter<'_, BDR> {
         }
 
         self.dev
-            .read((self.sector as u64) * SECTOR_SIZE_U64, &mut self.sector_buf)
-            .await?;
+            .read((self.sector as u64) * SECTOR_SIZE_U64, &mut self.sector_buf)?;
 
         Ok(())
     }
 
-    #[maybe_async]
-    pub async fn next_entry(
+    pub fn next_entry(
         &mut self,
     ) -> Result<Option<DirectoryEntryNode>, DirectoryEntryReadError<BDR::ReadError>> {
         if self.sector >= self.end_sector {
@@ -55,7 +51,6 @@ impl<BDR: BlockDeviceRead + ?Sized> DirentScanIter<'_, BDR> {
                 // advance the sector count and retry
                 if self.sector + 1 < self.end_sector {
                     self.next_sector()
-                        .await
                         .map_err(DirectoryEntryReadError::IOError)?;
                     continue;
                 }
@@ -76,7 +71,6 @@ impl<BDR: BlockDeviceRead + ?Sized> DirentScanIter<'_, BDR> {
 
             if self.offset + 0xe >= SECTOR_SIZE_USZ {
                 self.next_sector()
-                    .await
                     .map_err(DirectoryEntryReadError::IOError)?;
             }
 
@@ -85,21 +79,10 @@ impl<BDR: BlockDeviceRead + ?Sized> DirentScanIter<'_, BDR> {
     }
 }
 
-#[cfg(feature = "sync")]
-impl<E, BDR: BlockDeviceRead<ReadError = E>> Iterator for DirentScanIter<'_, BDR> {
-    type Item = DirectoryEntryNode;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.next_entry().ok().flatten()
-    }
-}
-
 impl DirectoryEntryTable {
     /// Scan the dirent tree iteratively, reading an entire sector at a time
     /// Order is not guaranteed, but reads are batched
-    /// Returns an async iterator that reads sequential records
-    #[maybe_async]
-    pub async fn scan_dirent_tree<'a, BDR: BlockDeviceRead + ?Sized>(
+    pub fn scan_dirent_tree<'a, BDR: BlockDeviceRead + ?Sized>(
         &self,
         dev: &'a mut BDR,
     ) -> Result<DirentScanIter<'a, BDR>, DirectoryEntryReadError<BDR::ReadError>> {
@@ -118,7 +101,6 @@ impl DirectoryEntryTable {
 
         let mut sector_buf = [0; SECTOR_SIZE_USZ];
         dev.read(sector_offset, &mut sector_buf)
-            .await
             .map_err(DirectoryEntryReadError::IOError)?;
 
         let sector = self.region.sector as usize;
@@ -132,10 +114,8 @@ impl DirectoryEntryTable {
     }
 }
 
-#[cfg(all(test, feature = "write"))]
+#[cfg(test)]
 mod test {
-    use futures::executor::block_on;
-
     use crate::{
         blockdev::BlockDeviceWrite,
         layout::{
@@ -167,7 +147,8 @@ mod test {
         };
         let mut dev = [];
 
-        let mut scan_iter = block_on(table.scan_dirent_tree(dev.as_mut_slice()))
+        let mut scan_iter = table
+            .scan_dirent_tree(dev.as_mut_slice())
             .expect("Creating scan iter should not fail");
         assert!(matches!(
             scan_iter,
@@ -179,7 +160,7 @@ mod test {
             }
         ));
 
-        let next = block_on(scan_iter.next_entry());
+        let next = scan_iter.next_entry();
         assert_eq!(next, Ok(None));
     }
 
@@ -193,7 +174,8 @@ mod test {
         };
         let mut dev = [0xffu8; 2048];
 
-        let mut scan_iter = block_on(table.scan_dirent_tree(dev.as_mut_slice()))
+        let mut scan_iter = table
+            .scan_dirent_tree(dev.as_mut_slice())
             .expect("Creating scan iter should not fail");
         assert!(matches!(
             scan_iter,
@@ -205,7 +187,7 @@ mod test {
             }
         ));
 
-        let next = block_on(scan_iter.next_entry());
+        let next = scan_iter.next_entry();
         assert_eq!(next, Ok(None));
     }
 
@@ -232,14 +214,17 @@ mod test {
             },
         };
 
-        let mut iter = block_on(table.scan_dirent_tree(dev.as_mut_slice()))
+        let mut iter = table
+            .scan_dirent_tree(dev.as_mut_slice())
             .expect("Creating scan iter should succeed");
         for _ in 0..7 {
-            let next = block_on(iter.next_entry()).expect("Entries in the sector should read");
+            let next = iter
+                .next_entry()
+                .expect("Entries in the sector should read");
             assert!(next.is_some());
         }
 
-        let next = block_on(iter.next_entry());
+        let next = iter.next_entry();
         assert_eq!(next, Err(DirectoryEntryReadError::DeserializationFailed));
     }
 
@@ -262,7 +247,7 @@ mod test {
                 0xff, 1, b'B',
                 0xff, // padding
             ];
-            block_on(slbd.write(2048, &dirtab)).expect("write should succeed");
+            slbd.write(2048, &dirtab).expect("write should succeed");
         }
 
         {
@@ -274,8 +259,8 @@ mod test {
                 0xff, 1, b'C',
                 0xff, // padding
             ];
-            block_on(slbd.write(4096, &dirtab)).expect("write should succeed");
-            block_on(slbd.write(6144, &dirtab)).expect("write should succeed");
+            slbd.write(4096, &dirtab).expect("write should succeed");
+            slbd.write(6144, &dirtab).expect("write should succeed");
         }
 
         let mut dev = SectorLinearImage::new(&slbd, &mut fs);
@@ -286,10 +271,13 @@ mod test {
             },
         };
 
-        let mut iter =
-            block_on(table.scan_dirent_tree(&mut dev)).expect("Creating scan iter should succeed");
+        let mut iter = table
+            .scan_dirent_tree(&mut dev)
+            .expect("Creating scan iter should succeed");
 
-        let next = block_on(iter.next_entry()).expect("Error on next entry is unexpected");
+        let next = iter
+            .next_entry()
+            .expect("Error on next entry is unexpected");
         assert_eq!(
             next,
             Some(DirectoryEntryNode {
@@ -307,7 +295,9 @@ mod test {
             })
         );
 
-        let next = block_on(iter.next_entry()).expect("Error on next entry is unexpected");
+        let next = iter
+            .next_entry()
+            .expect("Error on next entry is unexpected");
         assert_eq!(
             next,
             Some(DirectoryEntryNode {
@@ -325,7 +315,9 @@ mod test {
             })
         );
 
-        let next = block_on(iter.next_entry()).expect("Error on next entry is unexpected");
+        let next = iter
+            .next_entry()
+            .expect("Error on next entry is unexpected");
         assert_eq!(
             next,
             Some(DirectoryEntryNode {
@@ -344,17 +336,18 @@ mod test {
         );
 
         // Ensure reads don't extend into subsequent sectors
-        let next = block_on(iter.next_entry()).expect("Error on next entry is unexpected");
+        let next = iter
+            .next_entry()
+            .expect("Error on next entry is unexpected");
         assert_eq!(next, None);
-        let next = block_on(iter.next_entry()).expect("Error on next entry is unexpected");
+        let next = iter
+            .next_entry()
+            .expect("Error on next entry is unexpected");
         assert_eq!(next, None);
     }
 
     #[test]
-    #[cfg(feature = "std")]
     fn test_read_scan_iter_sector_rollover() {
-        use alloc::string::String;
-        use alloc::vec::Vec;
         use std::collections::HashSet;
 
         let mut entry_names: Vec<String> = Vec::new();
@@ -362,7 +355,7 @@ mod test {
         // Each entry is 0x10 (filename length of 2),
         // so 256 fills two sectors exactly.
         for i in 0..256 {
-            entry_names.push(alloc::format!("{i:02x}"));
+            entry_names.push(format!("{i:02x}"));
         }
 
         let mut dtb = AvlDirectoryEntryTableBuilder::default();
@@ -384,7 +377,8 @@ mod test {
             },
         };
 
-        let mut iter = block_on(table.scan_dirent_tree(buffers.dirtab_bytes.as_mut_slice()))
+        let mut iter = table
+            .scan_dirent_tree(buffers.dirtab_bytes.as_mut_slice())
             .expect("Creating iter should succeed");
 
         let mut name_set = HashSet::new();
@@ -393,7 +387,8 @@ mod test {
         }
 
         for _ in 0..256 {
-            let next = block_on(iter.next_entry())
+            let next = iter
+                .next_entry()
                 .expect("Reading next entry should succeed")
                 .expect("Next entry should exist");
 
@@ -405,9 +400,13 @@ mod test {
 
         assert!(name_set.is_empty());
 
-        let next = block_on(iter.next_entry()).expect("Reading next entry should succeed");
+        let next = iter
+            .next_entry()
+            .expect("Reading next entry should succeed");
         assert_eq!(next, None);
-        let next = block_on(iter.next_entry()).expect("Reading next entry should succeed");
+        let next = iter
+            .next_entry()
+            .expect("Reading next entry should succeed");
         assert_eq!(next, None);
     }
 }
