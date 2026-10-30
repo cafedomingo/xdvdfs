@@ -489,14 +489,14 @@ mod test {
             dir,
             &[
                 FileEntry {
-                    name: "b".into(),
-                    file_type: FileType::Directory,
-                    len: 2048,
-                },
-                FileEntry {
                     name: "d".into(),
                     file_type: FileType::File,
                     len: 13,
+                },
+                FileEntry {
+                    name: "b".into(),
+                    file_type: FileType::Directory,
+                    len: 2048,
                 },
             ]
         );

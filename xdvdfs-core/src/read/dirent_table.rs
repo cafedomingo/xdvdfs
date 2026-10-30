@@ -909,16 +909,16 @@ mod test_with_write {
         assert_eq!(tree.len(), 6);
 
         assert_eq!(tree[0].0, ImagePath::root());
-        assert_eq!(tree[0].1.name, name_bytes_from("a"));
+        assert_eq!(tree[0].1.name, name_bytes_from("f"));
         assert_eq!(tree[1].0, ImagePath::root());
-        assert_eq!(tree[1].1.name, name_bytes_from("f"));
+        assert_eq!(tree[1].1.name, name_bytes_from("a"));
         assert_eq!(tree[2].0, ImagePath::from("/a"));
-        assert_eq!(tree[2].1.name, name_bytes_from("b"));
+        assert_eq!(tree[2].1.name, name_bytes_from("e"));
         assert_eq!(tree[3].0, ImagePath::from("/a"));
-        assert_eq!(tree[3].1.name, name_bytes_from("e"));
+        assert_eq!(tree[3].1.name, name_bytes_from("b"));
         assert_eq!(tree[4].0, ImagePath::from("/a/b"));
-        assert_eq!(tree[4].1.name, name_bytes_from("c"));
+        assert_eq!(tree[4].1.name, name_bytes_from("d"));
         assert_eq!(tree[5].0, ImagePath::from("/a/b"));
-        assert_eq!(tree[5].1.name, name_bytes_from("d"));
+        assert_eq!(tree[5].1.name, name_bytes_from("c"));
     }
 }

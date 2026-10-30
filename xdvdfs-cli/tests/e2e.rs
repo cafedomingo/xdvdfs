@@ -21,6 +21,8 @@ const DIRENT_HEADER_LEN: usize = 0xe;
 const DIRENT_LEN: usize = DIRENT_HEADER_LEN + NAME_LEN;
 const SECTOR_LEN: usize = 2048;
 const MAX_DIRENT_OFFSET: usize = 65536;
+const LOOKUP_FILES: usize = 300;
+const REPACK_FILES: usize = 20;
 #[cfg(unix)]
 const OVERSIZED_FILE_LEN: u64 = (1 << 32) + 1;
 
@@ -114,8 +116,8 @@ fn truncated_image(work: &Path) -> PathBuf {
 const SUB_TABLE_SECTOR: u64 = 524;
 
 /// Packs `a.txt`, `big.bin` and `sub/f` into `work/img.xiso`, then cuts the
-/// image to `len` bytes. A three-entry table is balanced whatever the listing
-/// order, so `big.bin` is allocated first, then `a.txt`, then `/sub`'s table.
+/// image to `len` bytes. `big.bin` sorts in the middle, so it's the root
+/// table's root and is allocated first, then `a.txt`, then `/sub`'s table.
 fn sub_after_big_image(work: &Path, len: u64) -> PathBuf {
     let big = vec![1; 1_000_000];
     let files: &[(&str, &[u8])] = &[("a.txt", b"a"), ("big.bin", &big), ("sub/f", b"f")];
@@ -281,6 +283,57 @@ fn copy_out() {
     assert_trees_equal(&src, out.path());
 }
 
+/// `copy-out` finds a path by searching each table's tree, as the Xbox does
+#[test]
+fn lookup_finds_every_file() {
+    // Folded to upper case, `_` sorts after the letters
+    let names: Vec<_> = (0..LOOKUP_FILES)
+        .map(|i| format!("{}{i}", ["a", "B", "a_", "A_b", "_c"][i % 5]))
+        .collect();
+    let files: Vec<_> = names.iter().map(|n| (n.as_str(), n.as_bytes())).collect();
+    let work = tempdir().unwrap();
+    let src = work.path().join("src");
+    let img = work.path().join("img.xiso");
+    write_tree(&src, &files, &[]);
+    pack(&src, &img);
+
+    let out = tempdir().unwrap();
+    for name in &names {
+        run(&[
+            "copy-out".as_ref(),
+            img.as_ref(),
+            format!("/{name}").as_ref(),
+            out.path().join(name).as_ref(),
+        ]);
+    }
+    assert_trees_equal(&src, out.path());
+}
+
+#[test]
+fn repack_is_idempotent() {
+    let names: Vec<_> = (0..REPACK_FILES)
+        .map(|i| format!("{}{i}", ["f", "F_", "sub/g"][i % 3]))
+        .collect();
+    let files: Vec<_> = names.iter().map(|n| (n.as_str(), n.as_bytes())).collect();
+    let work = tempdir().unwrap();
+    let src = work.path().join("src");
+    write_tree(&src, &files, &["Empty", "sub/x"]);
+
+    let images = ["a.iso", "b.iso", "c.iso"].map(|name| work.path().join(name));
+    pack(&src, &images[0]);
+    pack(&images[0], &images[1]);
+    pack(&images[1], &images[2]);
+
+    let first = fs::read(&images[0]).unwrap();
+    for img in &images[1..] {
+        assert!(
+            fs::read(img).unwrap() == first,
+            "{} differs from a.iso",
+            img.display()
+        );
+    }
+}
+
 #[test]
 fn md5_file_larger_than_one_chunk() {
     let big: Vec<u8> = (0..2 * DATA_CHUNK_LEN + 13)
@@ -295,7 +348,7 @@ fn md5_file_larger_than_one_chunk() {
 
     let out = xdvdfs(&["md5".as_ref(), img.as_ref()]);
     assert_success(&out);
-    // md5 prints in image order, which follows the host's directory listing.
+    // md5 prints in table order, a tree preorder rather than by name
     let mut actual: Vec<String> = String::from_utf8(out.stdout)
         .unwrap()
         .lines()

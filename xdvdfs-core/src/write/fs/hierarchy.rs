@@ -2,6 +2,7 @@ use core::ops::DerefMut;
 use std::collections::VecDeque;
 
 use super::ImagePath;
+use crate::layout::cmp_ignore_case_utf8;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum FileType {
@@ -22,13 +23,9 @@ pub struct DirectoryTreeEntry {
     pub listing: Vec<(FileEntry, usize)>,
 }
 
-/// Returns a recursive listing of paths in order
-/// e.g. for a path hierarchy like this:
-/// /
-/// -- /a
-/// -- -- /a/b
-/// -- /b
-/// It might return the list: ["/", "/a", "/a/b", "/b"]
+/// Returns every directory breadth-first, each listing sorted with its directory
+/// table's name comparison. For directories `/a`, `/a/b` and `/B`, that's `/`,
+/// `/a`, `/B`, `/a/b`.
 /// `directory_found_callback` should be called each time
 /// a new directory is found, with the number of entries
 /// in that directory (for progress tracking).
@@ -41,7 +38,9 @@ pub fn dir_tree<FS: FilesystemHierarchy + ?Sized>(
     let mut out = Vec::new();
 
     while let Some(dir) = dirs.pop_front() {
-        let entries = fs.read_dir(&dir)?;
+        let mut entries = fs.read_dir(&dir)?;
+        // Traversal order decides where each directory's entries are allocated
+        entries.sort_by(|a, b| cmp_ignore_case_utf8(&a.name, &b.name));
         directory_found_callback(entries.len());
         let mut listing: Vec<(FileEntry, usize)> = Vec::with_capacity(entries.len());
 
