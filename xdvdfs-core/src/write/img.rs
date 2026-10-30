@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 use super::dirtab::{
     AvlDirectoryEntryTableBuilder, AvlDirectoryEntryTableWriter, DirtabWriterBuffers,
 };
-use super::fs::{DirectoryTreeEntry, FilesystemCopier, FilesystemHierarchy, PathRef};
+use super::fs::{DirectoryTreeEntry, FilesystemCopier, FilesystemHierarchy, PathRef, PathVec};
 use super::{FileStructureError, WriteError};
 
 use maybe_async::maybe_async;
@@ -32,7 +32,7 @@ fn create_dirent_tables<'a>(
         let path = &entry.dir;
         let dir_entries = &entry.listing;
 
-        let mut dirtab = AvlDirectoryEntryTableBuilder::default();
+        let mut dirtab = AvlDirectoryEntryTableBuilder::new(path.clone());
         dirtab.reserve(dir_entries.len());
 
         for (entry, dir_index) in dir_entries {
@@ -51,10 +51,12 @@ fn create_dirent_tables<'a>(
                     dirtab.add_dir(file_name, dir_size, *dir_index)?;
                 }
                 fs::FileType::File => {
-                    let file_size = entry
-                        .len
-                        .try_into()
-                        .map_err(|_| FileStructureError::FileTooLarge)?;
+                    let file_size = entry.len.try_into().map_err(|_| {
+                        FileStructureError::FileTooLarge(PathVec::from_base(
+                            path.clone(),
+                            file_name,
+                        ))
+                    })?;
                     dirtab.add_file(file_name, file_size)?;
                 }
             }
@@ -260,7 +262,7 @@ mod test {
     use crate::write::img::{NoOpProgressVisitor, OwnedProgressInfo};
 
     use super::fs::DirectoryTreeEntry;
-    use super::{create_dirent_tables, create_xdvdfs_image, ProgressInfo};
+    use super::{create_dirent_tables, create_xdvdfs_image, FileStructureError, ProgressInfo};
 
     #[test]
     fn test_create_dirent_tables_empty_root() {
@@ -291,6 +293,27 @@ mod test {
         let dirtabs = create_dirent_tables(dirtree).expect("Dirtab should be valid");
         assert_eq!(dirtabs.count, 1);
         assert_eq!(dirtabs.dirent_tables.len(), 1);
+    }
+
+    #[test]
+    fn test_create_dirent_tables_file_too_large_names_path() {
+        let dirtree = &[DirectoryTreeEntry {
+            dir: "/a".into(),
+            listing: vec![(
+                FileEntry {
+                    name: "big".to_string(),
+                    file_type: crate::write::fs::FileType::File,
+                    len: 1 << 32,
+                },
+                0,
+            )],
+        }];
+
+        let res = create_dirent_tables(dirtree).map(|tables| tables.count);
+        assert_eq!(
+            res,
+            Err(FileStructureError::FileTooLarge(PathVec::from("/a/big")))
+        );
     }
 
     #[test]

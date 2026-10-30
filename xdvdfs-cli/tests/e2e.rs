@@ -2,10 +2,11 @@ mod common;
 
 use std::ffi::OsStr;
 use std::fs::{self, File};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use common::{
     assert_error, assert_success, assert_trees_equal, place_at_offset, write_tree, xdvdfs,
+    xdvdfs_in,
 };
 use tempfile::tempdir;
 use xdvdfs::blockdev::XDVDFSOffsets;
@@ -20,6 +21,8 @@ const SECTOR_LEN: usize = 2048;
 const MAX_DIRENT_OFFSET: usize = 65536;
 // Mirrors cmd_unpack.rs, which tests can't import from the binary
 const EXTRACT_CHUNK_LEN: usize = 1 << 20;
+#[cfg(unix)]
+const OVERSIZED_FILE_LEN: u64 = (1 << 32) + 1;
 
 fn numbered(i: usize) -> String {
     format!("{i:0NAME_LEN$}")
@@ -52,6 +55,40 @@ fn pack_roundtrip(src: &Path, img: &Path) {
     let repacked_img = repacked.path().join("repacked.xiso");
     pack(img, &repacked_img);
     assert_unpacks_to(&repacked_img, src);
+}
+
+/// Runs a `pack` of `src` that should fail, checks it left no output image
+/// beside `src`, and returns its stderr.
+fn pack_error(src: &Path) -> String {
+    let img = src.with_file_name("out.xiso");
+    let stderr = assert_error(&xdvdfs(&["pack".as_ref(), src.as_ref(), img.as_ref()]));
+    for path in [&img, &img.with_added_extension("partial")] {
+        assert!(!path.exists(), "{} was left behind", path.display());
+    }
+    stderr
+}
+
+fn checksum(img: &Path) -> String {
+    let out = xdvdfs(&["checksum".as_ref(), "-s".as_ref(), img.as_ref()]);
+    assert_success(&out);
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    stdout.split('\t').next().unwrap().to_owned()
+}
+
+/// Packs a 1,000,000-byte `big.bin` into `work/img.xiso`, then cuts the
+/// image to 600,000 bytes.
+fn truncated_image(work: &Path) -> PathBuf {
+    let src = work.join("src");
+    let img = work.join("img.xiso");
+    write_tree(&src, &[("big.bin", &vec![1; 1_000_000])], &[]);
+    pack(&src, &img);
+    File::options()
+        .write(true)
+        .open(&img)
+        .unwrap()
+        .set_len(600_000)
+        .unwrap();
+    img
 }
 
 fn find_unique(haystack: &[u8], needle: &[u8]) -> usize {
@@ -280,16 +317,7 @@ fn unpack_twice_into_same_dir() {
 #[test]
 fn unpack_truncated_image_fails() {
     let work = tempdir().unwrap();
-    let src = work.path().join("src");
-    let img = work.path().join("img.xiso");
-    write_tree(&src, &[("big.bin", &vec![1; 1_000_000])], &[]);
-    pack(&src, &img);
-    File::options()
-        .write(true)
-        .open(&img)
-        .unwrap()
-        .set_len(600_000)
-        .unwrap();
+    let img = truncated_image(work.path());
 
     let out = tempdir().unwrap();
     let unpack = xdvdfs(&["unpack".as_ref(), img.as_ref(), out.path().as_ref()]);
@@ -331,4 +359,291 @@ fn pack_rejects_image_directory_loop() {
 
     let out = work.path().join("out.xiso");
     assert_error(&xdvdfs(&["pack".as_ref(), img.as_ref(), out.as_ref()]));
+}
+
+#[test]
+fn pack_unencodable_name_names_file() {
+    let work = tempdir().unwrap();
+    let src = work.path().join("src");
+    write_tree(&src, &[("日本.txt", b"data")], &[]);
+
+    let stderr = pack_error(&src);
+    assert!(
+        stderr.contains("日本.txt") && stderr.contains("rename"),
+        "pack printed:\n{stderr}"
+    );
+}
+
+#[test]
+fn pack_decomposed_name_names_file() {
+    let work = tempdir().unwrap();
+    let src = work.path().join("src");
+    let name = "cafe\u{301}.txt";
+    write_tree(&src, &[(name, b"coffee")], &[]);
+
+    let stderr = pack_error(&src);
+    assert!(
+        stderr.contains(name) && stderr.contains("rename"),
+        "pack printed:\n{stderr}"
+    );
+}
+
+#[test]
+fn pack_failure_keeps_existing_image() {
+    let work = tempdir().unwrap();
+    let good = work.path().join("good");
+    let bad = work.path().join("bad");
+    let img = work.path().join("out.iso");
+    write_tree(&good, &[("f", b"good")], &[]);
+    write_tree(&bad, &[("日本.txt", b"bad")], &[]);
+    pack(&good, &img);
+    let packed = fs::read(&img).unwrap();
+
+    assert_error(&xdvdfs(&["pack".as_ref(), bad.as_ref(), img.as_ref()]));
+    assert!(fs::read(&img).unwrap() == packed, "out.iso changed");
+}
+
+#[cfg(unix)]
+#[test]
+fn pack_oversized_file_names_file() {
+    let work = tempdir().unwrap();
+    let src = work.path().join("src");
+    fs::create_dir(&src).unwrap();
+    File::create(src.join("big.bin"))
+        .unwrap()
+        .set_len(OVERSIZED_FILE_LEN)
+        .unwrap();
+
+    let stderr = pack_error(&src);
+    assert!(stderr.contains("big.bin"), "pack printed:\n{stderr}");
+}
+
+#[cfg(unix)]
+#[test]
+fn pack_socket_names_file() {
+    use std::os::unix::net::UnixListener;
+
+    let work = tempdir().unwrap();
+    let src = work.path().join("src");
+    fs::create_dir(&src).unwrap();
+    let _listener = UnixListener::bind(src.join("sock")).unwrap();
+
+    let stderr = pack_error(&src);
+    assert!(stderr.contains("src/sock"), "pack printed:\n{stderr}");
+}
+
+#[test]
+fn pack_truncated_image_source_fails() {
+    let work = tempdir().unwrap();
+    let img = truncated_image(work.path());
+
+    let stderr = pack_error(&img);
+    assert!(stderr.contains("big.bin"), "pack printed:\n{stderr}");
+}
+
+#[test]
+fn compress_dot_source() {
+    let work = tempdir().unwrap();
+    let src = work.path().join("src");
+    write_tree(&src, &[("f", b"data")], &[]);
+
+    for cmd in ["pack", "compress"] {
+        let stderr = assert_error(&xdvdfs_in(&src, &[cmd.as_ref(), ".".as_ref()]));
+        assert!(
+            stderr.contains("Destination path is contained by source path"),
+            "{cmd} printed:\n{stderr}"
+        );
+    }
+
+    assert_success(&xdvdfs_in(
+        &src,
+        &["pack".as_ref(), ".".as_ref(), "../out.iso".as_ref()],
+    ));
+    assert_unpacks_to(&work.path().join("out.iso"), &src);
+    assert_success(&xdvdfs_in(
+        &src,
+        &["compress".as_ref(), ".".as_ref(), "../out.cso".as_ref()],
+    ));
+}
+
+#[test]
+fn compress_matches_pack() {
+    let work = tempdir().unwrap();
+    let src = work.path().join("src");
+    let img = work.path().join("img.xiso");
+    write_tree(
+        &src,
+        &[
+            ("unaligned", &[7; SECTOR_LEN + 100]),
+            ("empty", b""),
+            ("a/small", b"small"),
+        ],
+        &[],
+    );
+    pack(&src, &img);
+
+    // ciso drops the output's directory and names the first part `.1.cso`
+    assert_success(&xdvdfs_in(
+        work.path(),
+        &["compress".as_ref(), "src".as_ref(), "out.cso".as_ref()],
+    ));
+    assert_eq!(checksum(&work.path().join("out.1.cso")), checksum(&img));
+}
+
+#[test]
+fn exiso_r_rejects_non_image() {
+    let work = tempdir().unwrap();
+    let file = work.path().join("notimage.bin");
+    let contents = b"not an xiso image";
+    fs::write(&file, contents).unwrap();
+
+    assert_error(&xdvdfs(&[
+        "extract-xiso".as_ref(),
+        "-r".as_ref(),
+        file.as_ref(),
+    ]));
+    assert_eq!(fs::read(&file).unwrap(), contents);
+    for left in ["notimage.bin.old", "notimage.old", "notimage.bin.partial"] {
+        assert!(!work.path().join(left).exists(), "{left} was created");
+    }
+}
+
+#[test]
+fn exiso_r_keeps_existing_old() {
+    let work = tempdir().unwrap();
+    let src = work.path().join("src");
+    let img = work.path().join("g.iso");
+    let old = work.path().join("g.iso.old");
+    write_tree(&src, &[("f", b"data")], &[]);
+    pack(&src, &img);
+    let packed = fs::read(&img).unwrap();
+    fs::write(&old, b"earlier backup").unwrap();
+
+    assert_error(&xdvdfs(&[
+        "extract-xiso".as_ref(),
+        "-r".as_ref(),
+        img.as_ref(),
+    ]));
+    assert!(fs::read(&img).unwrap() == packed, "g.iso changed");
+    assert_eq!(fs::read(&old).unwrap(), b"earlier backup");
+}
+
+#[test]
+fn exiso_r_backup_name() {
+    let work = tempdir().unwrap();
+    let src = work.path().join("src");
+    let img = work.path().join("g.iso");
+    write_tree(&src, &[("f", b"data")], &[]);
+    pack(&src, &img);
+    let packed = fs::read(&img).unwrap();
+
+    run(&["extract-xiso".as_ref(), "-r".as_ref(), img.as_ref()]);
+    let old = work.path().join("g.iso.old");
+    assert!(
+        fs::read(&old).unwrap() == packed,
+        "g.iso.old isn't the input"
+    );
+    assert!(!work.path().join("g.old").exists());
+    assert_unpacks_to(&img, &src);
+}
+
+#[test]
+fn pack_source_named_like_partial() {
+    let work = tempdir().unwrap();
+    let src = work.path().join("src");
+    let source = work.path().join("g.iso.partial");
+    let img = work.path().join("g.iso");
+    write_tree(&src, &[("f", b"data")], &[]);
+    pack(&src, &source);
+    let packed = fs::read(&source).unwrap();
+
+    assert_error(&xdvdfs(&["pack".as_ref(), source.as_ref(), img.as_ref()]));
+    assert!(
+        fs::read(&source).unwrap() == packed,
+        "g.iso.partial changed"
+    );
+    assert!(!img.exists());
+}
+
+#[test]
+fn pack_output_is_directory() {
+    let work = tempdir().unwrap();
+    let src = work.path().join("src");
+    let out = work.path().join("outdir");
+    write_tree(&src, &[("f", b"data")], &[]);
+    fs::create_dir(&out).unwrap();
+
+    let stderr = assert_error(&xdvdfs(&["pack".as_ref(), src.as_ref(), out.as_ref()]));
+    assert!(stderr.contains("outdir"), "pack printed:\n{stderr}");
+    assert_eq!(fs::read_dir(&out).unwrap().count(), 0);
+    assert!(!out.with_added_extension("partial").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn pack_through_output_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let work = tempdir().unwrap();
+    let src = work.path().join("src");
+    let store = work.path().join("store");
+    write_tree(&src, &[("f", b"data")], &[]);
+    fs::create_dir(&store).unwrap();
+    fs::write(store.join("old.iso"), b"earlier image").unwrap();
+
+    // An existing target is replaced, and a dangling link's target is created
+    for target in ["old.iso", "new.iso"] {
+        let link = work.path().join(format!("link-{target}"));
+        symlink(Path::new("store").join(target), &link).unwrap();
+        pack(&src, &link);
+        assert!(fs::symlink_metadata(&link).unwrap().is_symlink());
+        assert_unpacks_to(&store.join(target), &src);
+    }
+
+    let inner_link = src.join("link.iso");
+    symlink("../store/old.iso", &inner_link).unwrap();
+    pack(&src, &inner_link);
+    let ls = xdvdfs(&["ls".as_ref(), store.join("old.iso").as_ref()]);
+    assert_success(&ls);
+    let listing = String::from_utf8(ls.stdout).unwrap();
+    assert!(!listing.contains("partial"), "ls printed:\n{listing}");
+
+    let left: Vec<_> = fs::read_dir(&store)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .filter(|name| name.to_string_lossy().ends_with(".partial"))
+        .collect();
+    assert!(left.is_empty(), "{left:?} were left behind");
+}
+
+#[test]
+fn exiso_r_restores_input_when_replace_fails() {
+    let work = tempdir().unwrap();
+    let src = work.path().join("src");
+    let img = work.path().join("g.iso");
+    let out = work.path().join("x").join("out");
+    write_tree(&src, &[("f", b"data")], &[]);
+    pack(&src, &img);
+    let packed = fs::read(&img).unwrap();
+    // A directory where the output goes makes the final rename fail. `-d`
+    // places it beside `out` (exiso_compat.rs), so block both spots.
+    for blocker in [out.join("g.iso"), out.with_file_name("g.iso")] {
+        fs::create_dir_all(blocker.join("keep")).unwrap();
+    }
+
+    assert_error(&xdvdfs(&[
+        "extract-xiso".as_ref(),
+        "-d".as_ref(),
+        out.as_ref(),
+        "-r".as_ref(),
+        img.as_ref(),
+    ]));
+    assert!(fs::read(&img).unwrap() == packed, "g.iso changed");
+    assert!(!img.with_added_extension("old").exists());
+    for partial in [
+        out.join("g.iso.partial"),
+        out.with_file_name("g.iso.partial"),
+    ] {
+        assert!(!partial.exists(), "{} was left behind", partial.display());
+    }
 }

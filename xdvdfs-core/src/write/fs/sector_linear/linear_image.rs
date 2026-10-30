@@ -80,15 +80,18 @@ where
                     let end = position + to_read;
                     buffer[index..(index + to_read)].clone_from_slice(&data[position..end]);
                 }
-                SectorLinearBlockRegion::File { path, .. } => {
+                SectorLinearBlockRegion::File { path, len } => {
+                    let file_offset = content_offset_sector + position;
+                    let file_read =
+                        core::cmp::min(to_read, len.saturating_sub(file_offset) as usize);
                     self.fs
                         .fs
                         .copy_file_in(
                             path.into(),
-                            &mut buffer[index..(index + to_read)],
-                            position + content_offset * layout::SECTOR_SIZE as u64,
+                            &mut buffer[index..(index + file_read)],
+                            file_offset,
                             0,
-                            to_read as u64,
+                            file_read as u64,
                         )
                         .await?;
                 }
@@ -361,7 +364,7 @@ mod test {
 
         let path = PathVec::from("/a/b");
         slbd.contents
-            .insert(0, SectorLinearBlockRegion::File { path, sectors: 2 });
+            .insert(0, SectorLinearBlockRegion::File { path, len: 4000 });
 
         let mut image = SectorLinearImage::new(&slbd, &mut slbfs);
         futures::executor::block_on(async {
@@ -385,7 +388,7 @@ mod test {
 
         let path = PathVec::from("/a/b");
         slbd.contents
-            .insert(0, SectorLinearBlockRegion::File { path, sectors: 2 });
+            .insert(0, SectorLinearBlockRegion::File { path, len: 4000 });
 
         let mut image = SectorLinearImage::new(&slbd, &mut slbfs);
         futures::executor::block_on(async {
@@ -411,7 +414,7 @@ mod test {
 
         let path = PathVec::from("/a/b");
         slbd.contents
-            .insert(0, SectorLinearBlockRegion::File { path, sectors: 2 });
+            .insert(0, SectorLinearBlockRegion::File { path, len: 4000 });
 
         let mut image = SectorLinearImage::new(&slbd, &mut slbfs);
         futures::executor::block_on(async {
@@ -436,7 +439,7 @@ mod test {
             3,
             SectorLinearBlockRegion::File {
                 path: "/a/b".into(),
-                sectors: 1,
+                len: 2000,
             },
         );
         let data = alloc::vec![15; 2048];

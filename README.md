@@ -46,6 +46,7 @@ xdvdfs pack <directory> [optional output path]
 ```
 
 This will create an iso that matches 1-to-1 with the input directory.
+Symlinks are followed; a directory symlink that loops is an error. If packing fails, the error names the file at fault and any existing image at the output path is left untouched.
 
 #### Repacking an Image
 

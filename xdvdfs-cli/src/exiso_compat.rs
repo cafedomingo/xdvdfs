@@ -1,10 +1,10 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::bail;
+use anyhow::{bail, Context};
 use clap::{ArgAction, Parser, Subcommand};
 use maybe_async::maybe_async;
 
-use crate::img::{absolute_path, with_extension};
+use crate::img::absolute_path;
 
 #[derive(Subcommand)]
 #[command(
@@ -164,7 +164,7 @@ async fn exiso_repack(
     directory: &Option<String>,
     delete: bool,
 ) -> anyhow::Result<()> {
-    use crate::cmd_pack::cmd_pack_path;
+    use crate::cmd_pack::pack_into;
 
     for xiso in xiso_list {
         let source_path = absolute_path(Path::new(&xiso))?;
@@ -173,22 +173,35 @@ async fn exiso_repack(
             bail!("Repack input must be a file");
         }
 
-        // Move input to `input.old`
-        let renamed_input_path = with_extension(&source_path, "old", false);
-        std::fs::rename(&source_path, &renamed_input_path)?;
+        let backup_path = source_path.with_added_extension("old");
+        if backup_path.exists() {
+            bail!("{} already exists", backup_path.display());
+        }
 
-        // Pack using `input.old` as input, and source path as output
         let dest_path = match directory {
             Some(d) => {
                 absolute_path(Path::new(d))?.with_file_name(source_path.file_name().unwrap())
             }
-            None => source_path,
+            None => source_path.clone(),
         };
 
-        cmd_pack_path(&renamed_input_path, &dest_path).await?;
+        // Packing first leaves the input untouched if it isn't an image
+        let partial_path = dest_path.with_added_extension("partial");
+        pack_into(&source_path, &partial_path).await?;
+        if let Err(err) = std::fs::rename(&source_path, &backup_path) {
+            let _ = std::fs::remove_file(&partial_path);
+            return Err(err).with_context(|| {
+                format!("Failed to rename the input to {}", backup_path.display())
+            });
+        }
+        if let Err(err) = std::fs::rename(&partial_path, &dest_path) {
+            let _ = std::fs::remove_file(&partial_path);
+            let _ = std::fs::rename(&backup_path, &source_path);
+            return Err(err).with_context(|| format!("Failed to replace {}", dest_path.display()));
+        }
 
         if delete {
-            std::fs::remove_file(&renamed_input_path)?;
+            std::fs::remove_file(&backup_path)?;
         }
     }
 

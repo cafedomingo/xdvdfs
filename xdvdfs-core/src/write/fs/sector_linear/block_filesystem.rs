@@ -69,7 +69,7 @@ where
                 sector,
                 SectorLinearBlockRegion::File {
                     path: src.into(),
-                    sectors: sector_span,
+                    len: size,
                 },
             )
             .ok_or(())
