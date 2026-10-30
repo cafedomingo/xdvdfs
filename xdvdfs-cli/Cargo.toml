@@ -19,7 +19,6 @@ clap = { version = "4.2.1", features = ["derive"] }
 md-5 = { version = "0.10.5", default-features = false }
 anyhow = "1.0.71"
 env_logger = "0.10.0"
-ciso = { version = "0.3.0", default-features = false, features = ["sync"] }
 
 [[bin]]
 name = "xdvdfs"

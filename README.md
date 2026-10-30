@@ -60,6 +60,18 @@ xdvdfs pack <input-image> [optional output path]
 
 This will create an iso that matches 1-to-1 with the input image.
 
+#### Compressing an Image
+
+To pack a directory or image into a CSO, the compressed format that Project Stellar loads, run:
+
+```sh
+xdvdfs compress <directory or input-image> [optional output path]
+```
+
+For an output path of `game.cso`, `game` or `game.iso` this writes `game.1.cso`, plus `game.2.cso` once the compressed output passes FATX's 4 GiB file limit, laid out as MakeMHz's [`ciso.py`](https://github.com/MakeMHz/stellar-cso) writes them. A `game.2.cso` left from an earlier, larger image is removed. As with `pack`, a failure leaves any existing output untouched.
+
+`ls`, `tree`, `checksum`, `md5` and `info` read CSOs: `game.1.cso` with any parts after it, or a single-file `game.cso`. `pack`, `compress`, `unpack` and `copy-out` take XISO images only. Split CSOs written by upstream xdvdfs don't read.
+
 #### Unpacking
 
 To unpack an image, run:
