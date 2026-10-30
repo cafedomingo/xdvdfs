@@ -3,8 +3,6 @@ use std::fs::{self, DirEntry, File};
 use std::io::{self, ErrorKind, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-use crate::blockdev::{BlockDeviceWrite, NullBlockDevice};
-
 use super::{FileEntry, FileType, FilesystemCopier, FilesystemHierarchy, PathRef};
 
 pub struct StdFilesystem {
@@ -94,26 +92,23 @@ impl StdFilesystem {
 }
 
 impl FilesystemHierarchy for StdFilesystem {
-    type Error = io::Error;
-
-    fn read_dir(&mut self, dir: PathRef<'_>) -> Result<Vec<FileEntry>, io::Error> {
+    fn read_dir(&mut self, dir: PathRef<'_>) -> crate::Result<Vec<FileEntry>> {
         let dir = dir.as_path_buf(&self.root);
-        fs::read_dir(&dir)
+        let entries = fs::read_dir(&dir)
             .map_err(|err| path_error(&dir, err.kind(), err))?
             .map(|entry| {
                 let entry = entry.map_err(|err| path_error(&dir, err.kind(), err))?;
                 self.file_entry(&dir, entry)
             })
-            .collect()
+            .collect::<io::Result<_>>()?;
+        Ok(entries)
     }
 }
 
 impl<T> FilesystemCopier<T> for StdFilesystem
 where
-    T: io::Write + Seek + BlockDeviceWrite<WriteError = io::Error>,
+    T: io::Write + Seek,
 {
-    type Error = io::Error;
-
     fn copy_file_in(
         &mut self,
         src: PathRef<'_>,
@@ -121,7 +116,7 @@ where
         input_offset: u64,
         output_offset: u64,
         size: u64,
-    ) -> Result<u64, io::Error> {
+    ) -> crate::Result<u64> {
         dest.seek(SeekFrom::Start(output_offset))?;
 
         let src = src.as_path_buf(&self.root);
@@ -129,7 +124,7 @@ where
         let mut file = io::BufReader::with_capacity(1024 * 1024, file.take(size));
         let copied = io::copy(&mut file, dest).map_err(|err| path_error(&src, err.kind(), err))?;
         if copied < size {
-            return Err(short_file_error(&src));
+            return Err(short_file_error(&src).into());
         }
 
         Ok(copied)
@@ -137,8 +132,6 @@ where
 }
 
 impl FilesystemCopier<[u8]> for StdFilesystem {
-    type Error = io::Error;
-
     fn copy_file_in(
         &mut self,
         src: PathRef<'_>,
@@ -146,7 +139,7 @@ impl FilesystemCopier<[u8]> for StdFilesystem {
         input_offset: u64,
         output_offset: u64,
         size: u64,
-    ) -> Result<u64, io::Error> {
+    ) -> crate::Result<u64> {
         let src = src.as_path_buf(&self.root);
         let output_offset = output_offset as usize;
         let size = core::cmp::min(size as usize, <[u8]>::len(dest) - output_offset);
@@ -162,32 +155,16 @@ impl FilesystemCopier<[u8]> for StdFilesystem {
     }
 }
 
-impl FilesystemCopier<NullBlockDevice> for StdFilesystem {
-    type Error = core::convert::Infallible;
-
-    fn copy_file_in(
-        &mut self,
-        _src: PathRef<'_>,
-        dest: &mut NullBlockDevice,
-        _input_offset: u64,
-        output_offset: u64,
-        size: u64,
-    ) -> Result<u64, core::convert::Infallible> {
-        dest.write_size_adjustment(output_offset, size);
-        Ok(size)
-    }
-}
-
 #[cfg(test)]
 mod test {
     use std::io::{Cursor, Write};
 
     use crate::{
-        blockdev::NullBlockDevice,
         write::fs::{
             FileEntry, FileType, FilesystemCopier, FilesystemHierarchy, SectorLinearBlockDevice,
             SectorLinearBlockFilesystem, SectorLinearImage,
         },
+        Error,
     };
 
     use super::StdFilesystem;
@@ -298,33 +275,6 @@ mod test {
     }
 
     #[test]
-    fn test_write_stdfs_null_copier() {
-        let tempdir = tempfile::tempdir().expect("Failed to create tempdir");
-
-        std::fs::create_dir(tempdir.path().join("subdir")).expect("Failed to create dir direntry");
-
-        {
-            let mut file = std::fs::File::create(tempdir.path().join("subdir/file"))
-                .expect("Failed to create file direntry");
-            file.write_all(b"Hello World")
-                .expect("Failed to write to file entry");
-        }
-
-        let mut stdfs = StdFilesystem::create(tempdir.path());
-        let mut nullbd = NullBlockDevice::default();
-
-        let result = stdfs.copy_file_in(
-            "subdir/file".into(),
-            &mut nullbd,
-            /*input_offset=*/ 1,
-            /*output_offset=*/ 2,
-            /*size=*/ 10,
-        );
-        assert!(result.is_ok_and(|len| len == 10));
-        assert_eq!(nullbd.len_blocking(), 12);
-    }
-
-    #[test]
     fn test_write_stdfs_io_write_copier_short_file_errors() {
         let tempdir = tempfile::tempdir().expect("Failed to create tempdir");
         let path = tempdir.path().join("file");
@@ -340,7 +290,9 @@ mod test {
             /*output_offset=*/ 0,
             /*size=*/ 16,
         );
-        let err = result.expect_err("copy past the end of the file should fail");
+        let Err(Error::Io(err)) = result else {
+            panic!("copy past the end of the file should fail: {result:?}");
+        };
         assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
         assert!(
             err.to_string().contains(&path.display().to_string()),
@@ -376,7 +328,7 @@ mod test {
         dir: &std::path::Path,
         data: &[u8],
         listed_len: u64,
-    ) -> std::io::Result<Vec<u8>> {
+    ) -> crate::Result<Vec<u8>> {
         std::fs::write(dir.join("file"), data).expect("Failed to write file");
 
         let mut slbfs = SectorLinearBlockFilesystem::new(StdFilesystem::create(dir));
@@ -402,7 +354,7 @@ mod test {
     #[test]
     fn test_write_stdfs_linear_image_short_file_errors() {
         let tempdir = tempfile::tempdir().expect("Failed to create tempdir");
-        let Err(err) = linear_image_read(tempdir.path(), &[7; 100], 3000) else {
+        let Err(Error::Io(err)) = linear_image_read(tempdir.path(), &[7; 100], 3000) else {
             panic!("Read past the end of the file should fail");
         };
         let path = tempdir.path().join("file");

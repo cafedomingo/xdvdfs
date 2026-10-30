@@ -1,4 +1,4 @@
-use crate::layout::{is_safe_name, DirentName, NameEncodingError};
+use crate::layout::DirentName;
 
 use super::{DirectoryEntryDiskData, DirentAttributes, DiskRegion};
 
@@ -18,27 +18,17 @@ pub struct DirectoryEntryData<'alloc> {
 }
 
 impl<'alloc> DirectoryEntryData<'alloc> {
+    /// Returns `None` if `name` is longer than 255 bytes
     pub fn new_without_sector(
         name: &'alloc str,
         size: u32,
         attributes: DirentAttributes,
         idx: usize,
-    ) -> Result<Self, NameEncodingError> {
-        if !is_safe_name(name) {
-            return Err(NameEncodingError::UnsafeName);
-        }
-
-        if name.len() > 255 {
-            return Err(NameEncodingError::NameTooLong);
-        }
-
-        let filename_length = name
-            .len()
-            .try_into()
-            .map_err(|_| NameEncodingError::NameTooLong)?;
+    ) -> Option<Self> {
+        let filename_length = name.len().try_into().ok()?;
         let name = DirentName::new(name);
 
-        Ok(Self {
+        Some(Self {
             node: DirectoryEntryDiskData {
                 data: DiskRegion { sector: 0, size },
                 attributes,
@@ -53,7 +43,7 @@ impl<'alloc> DirectoryEntryData<'alloc> {
         self.name.get_name()
     }
 
-    pub fn compute_len_and_name_encoding(&mut self) -> Result<u8, NameEncodingError> {
+    pub fn compute_len_and_name_encoding(&mut self) -> Option<u8> {
         self.name.set_encode_name()
     }
 

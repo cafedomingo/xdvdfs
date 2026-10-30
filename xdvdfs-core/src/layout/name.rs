@@ -1,5 +1,3 @@
-use thiserror::Error;
-
 pub fn cmp_ignore_case_utf8(a: &str, b: &str) -> core::cmp::Ordering {
     use core::cmp::Ordering;
 
@@ -28,16 +26,6 @@ pub fn cmp_ignore_case_utf8(a: &str, b: &str) -> core::cmp::Ordering {
             cmp => break cmp,
         }
     }
-}
-
-#[derive(Error, Copy, Clone, Debug, Eq, PartialEq)]
-pub enum NameEncodingError {
-    #[error("name is longer than an Xbox image allows (255 bytes); rename it")]
-    NameTooLong,
-    #[error("name can't be stored in an Xbox image (Windows-1252); rename it")]
-    StringEncodingError,
-    #[error("name is empty, `.` or `..`, or contains `/`, `\\`, `:` or NUL; rename it")]
-    UnsafeName,
 }
 
 /// Whether `name` is safe to use as a single path component on any host.
@@ -88,11 +76,13 @@ impl<'alloc> DirentName<'alloc> {
         self.name
     }
 
-    pub fn set_encode_name(&mut self) -> Result<u8, NameEncodingError> {
+    /// Returns the length of the name in Windows-1252, or `None` if it has a
+    /// character Windows-1252 lacks or doesn't fit in 255 bytes of it
+    pub fn set_encode_name(&mut self) -> Option<u8> {
         use encoding_rs::EncoderResult;
 
         if let DirentNameStored::WithEncoding(_, size) = self.name_inner {
-            return Ok(size);
+            return Some(size);
         }
 
         let mut buffer = [0u8; 255];
@@ -100,17 +90,15 @@ impl<'alloc> DirentName<'alloc> {
 
         let (result, bytes_read, bytes_written) =
             encoder.encode_from_utf8_without_replacement(self.name, &mut buffer, true);
-        match result {
-            EncoderResult::InputEmpty => {}
-            EncoderResult::OutputFull => return Err(NameEncodingError::NameTooLong),
-            EncoderResult::Unmappable(_) => return Err(NameEncodingError::StringEncodingError),
+        if result != EncoderResult::InputEmpty {
+            return None;
         }
 
         assert!(bytes_written <= 255);
         self.name_inner = DirentNameStored::WithEncoding(buffer, bytes_written as u8);
 
         assert_eq!(bytes_read, self.name.len());
-        Ok(bytes_written as u8)
+        Some(bytes_written as u8)
     }
 
     pub fn get_encoded_name(&self) -> &[u8] {
@@ -235,8 +223,6 @@ case_cmp_test!(test_layout_dirent_name_cmp, |a, b| {
 
 #[cfg(test)]
 mod test {
-    use crate::layout::NameEncodingError;
-
     use super::DirentName;
 
     #[test]
@@ -276,10 +262,10 @@ mod test {
 
         let mut name = DirentName::new(&s);
         let res = name.set_encode_name();
-        assert_eq!(res, Ok(255));
+        assert_eq!(res, Some(255));
 
         let res = name.set_encode_name();
-        assert_eq!(res, Ok(255));
+        assert_eq!(res, Some(255));
     }
 
     #[test]
@@ -292,13 +278,13 @@ mod test {
 
         let mut name = DirentName::new(&s);
         let res = name.set_encode_name();
-        assert_eq!(res, Err(NameEncodingError::NameTooLong));
+        assert_eq!(res, None);
     }
 
     #[test]
     fn test_layout_dirent_name_encode_invalid_char() {
         let mut name = DirentName::new("😀");
         let res = name.set_encode_name();
-        assert_eq!(res, Err(NameEncodingError::StringEncodingError));
+        assert_eq!(res, None);
     }
 }

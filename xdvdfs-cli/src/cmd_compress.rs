@@ -96,8 +96,7 @@ pub fn cmd_compress(args: &CompressArgs) -> Result<(), anyhow::Error> {
         ciso::write::write_ciso_image(&mut input, &mut output, progress_callback_compression)?;
     } else if meta.is_file() {
         let source = open_image_raw(&source_path)?;
-        let mut fs = write::fs::XDVDFSFilesystem::new(source)
-            .ok_or(anyhow::anyhow!("Failed to create XDVDFS filesystem"))?;
+        let mut fs = write::fs::XDVDFSFilesystem::new(source)?;
 
         let mut slbd = write::fs::SectorLinearBlockDevice::default();
         let mut slbfs: BufFileSectorLinearFs = write::fs::SectorLinearBlockFilesystem::new(&mut fs);

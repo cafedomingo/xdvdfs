@@ -1,8 +1,8 @@
 use encoding_rs::WINDOWS_1252;
 use std::borrow::Cow;
-use thiserror::Error;
 
 use super::{is_safe_name, DirectoryEntryDiskNode};
+use crate::Error;
 
 /// In-memory structure to contain an on-disk tree node and
 /// file name information.
@@ -11,14 +11,6 @@ pub struct DirectoryEntryNode {
     pub node: DirectoryEntryDiskNode,
     pub name: [u8; 256],
     pub offset: u64,
-}
-
-#[derive(Error, Debug, Clone, Eq, PartialEq)]
-pub enum NameDeserializationError {
-    #[error("failed to deserialize file name into utf-8")]
-    InvalidEncoding,
-    #[error("unsafe file name {0:?}")]
-    UnsafeName(String),
 }
 
 impl DirectoryEntryNode {
@@ -50,13 +42,13 @@ impl DirectoryEntryNode {
 
     /// Returns the file name decoded to UTF-8, or an error if it can't be
     /// decoded or isn't safe to use as a single path component.
-    pub fn name_str(&self) -> Result<Cow<'_, str>, NameDeserializationError> {
+    pub fn name_str(&self) -> crate::Result<Cow<'_, str>> {
         let name = WINDOWS_1252
             .decode_without_bom_handling_and_without_replacement(self.name_slice())
-            .ok_or(NameDeserializationError::InvalidEncoding)?;
+            .ok_or(Error::InvalidNameEncoding)?;
 
         if !is_safe_name(&name) {
-            return Err(NameDeserializationError::UnsafeName(name.into_owned()));
+            return Err(Error::UnsafeName(name.into_owned()));
         }
 
         Ok(name)
@@ -69,7 +61,8 @@ mod test {
         DirectoryEntryDiskData, DirectoryEntryDiskNode, DirentAttributes, DiskRegion,
     };
 
-    use super::{DirectoryEntryNode, NameDeserializationError};
+    use super::DirectoryEntryNode;
+    use crate::Error;
 
     #[test]
     fn test_layout_dirent_node_deserialize_empty_ff_filled() {
@@ -132,8 +125,8 @@ mod test {
             offset: 0,
         };
 
-        let decoded_name = node.name_str();
-        assert_eq!(decoded_name, Ok("AŸ".into()));
+        let decoded_name = node.name_str().expect("Name should decode");
+        assert_eq!(decoded_name, "AŸ");
     }
 
     #[test]
@@ -160,12 +153,12 @@ mod test {
             assert!(
                 matches!(
                     node_named(name.as_bytes()).name_str(),
-                    Err(NameDeserializationError::UnsafeName(_))
+                    Err(Error::UnsafeName(_))
                 ),
                 "{name:?}"
             );
         }
-        assert_eq!(node_named(b"...").name_str(), Ok("...".into()));
-        assert_eq!(node_named(b"caf\xe9").name_str(), Ok("café".into()));
+        assert_eq!(node_named(b"...").name_str().unwrap(), "...");
+        assert_eq!(node_named(b"caf\xe9").name_str().unwrap(), "café");
     }
 }

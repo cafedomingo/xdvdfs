@@ -1,20 +1,14 @@
-use thiserror::Error;
+use std::io;
 
 use super::{BlockDeviceRead, BlockDeviceWrite};
 
-#[derive(Error, Copy, Clone, Debug, Eq, PartialEq)]
-#[error("io operation out of bounds")]
-pub struct ByteSliceOutOfBounds;
-
 impl BlockDeviceRead for [u8] {
-    type ReadError = ByteSliceOutOfBounds;
-
-    fn read(&mut self, offset: u64, buffer: &mut [u8]) -> Result<(), ByteSliceOutOfBounds> {
+    fn read(&mut self, offset: u64, buffer: &mut [u8]) -> io::Result<()> {
         let offset = offset as usize;
         let source_len = self.as_ref().len();
         let size = <[u8]>::len(buffer);
         if offset >= source_len || source_len - offset < size {
-            return Err(ByteSliceOutOfBounds);
+            return Err(io::ErrorKind::UnexpectedEof.into());
         }
 
         let range = offset..(offset + size);
@@ -24,27 +18,27 @@ impl BlockDeviceRead for [u8] {
 }
 
 impl BlockDeviceWrite for [u8] {
-    type WriteError = ByteSliceOutOfBounds;
-
-    fn write(&mut self, offset: u64, buffer: &[u8]) -> Result<(), Self::WriteError> {
-        let offset: usize = offset.try_into().map_err(|_| ByteSliceOutOfBounds)?;
+    fn write(&mut self, offset: u64, buffer: &[u8]) -> io::Result<()> {
+        let offset: usize = offset.try_into().map_err(|_| io::ErrorKind::WriteZero)?;
         let buffer_size = <[u8]>::len(self);
         if offset >= buffer_size || buffer_size - offset < buffer.len() {
-            return Err(ByteSliceOutOfBounds);
+            return Err(io::ErrorKind::WriteZero.into());
         }
 
         self[offset..(offset + buffer.len())].copy_from_slice(buffer);
         Ok(())
     }
 
-    fn len(&mut self) -> Result<u64, Self::WriteError> {
+    fn len(&mut self) -> io::Result<u64> {
         Ok(<[u8]>::len(self) as u64)
     }
 }
 
 #[cfg(test)]
 mod test {
-    use crate::blockdev::{BlockDeviceRead, BlockDeviceWrite, ByteSliceOutOfBounds};
+    use std::io::ErrorKind;
+
+    use crate::blockdev::{BlockDeviceRead, BlockDeviceWrite};
 
     #[test]
     fn test_blockdev_byte_slice_read_offset_out_of_range() {
@@ -52,7 +46,7 @@ mod test {
         let mut buffer = [0u8; 100];
 
         let res = bytes.as_mut_slice().read(6, &mut buffer);
-        assert_eq!(res, Err(ByteSliceOutOfBounds));
+        assert!(res.is_err_and(|err| err.kind() == ErrorKind::UnexpectedEof));
     }
 
     #[test]
@@ -61,7 +55,7 @@ mod test {
         let mut buffer = [0u8; 100];
 
         let res = bytes.as_mut_slice().read(0, &mut buffer);
-        assert_eq!(res, Err(ByteSliceOutOfBounds));
+        assert!(res.is_err_and(|err| err.kind() == ErrorKind::UnexpectedEof));
     }
 
     #[test]
@@ -69,8 +63,10 @@ mod test {
         let mut bytes = [1, 2, 3, 4, 5];
         let mut buffer = [0u8; 100];
 
-        let res = bytes.as_mut_slice().read(1, &mut buffer[..3]);
-        assert_eq!(res, Ok(()));
+        bytes
+            .as_mut_slice()
+            .read(1, &mut buffer[..3])
+            .expect("Read should succeed");
         assert_eq!(buffer[..3], [2, 3, 4]);
     }
 
@@ -80,7 +76,7 @@ mod test {
         let mut buffer = [0u8; 100];
 
         let res = buffer.as_mut_slice().write(105, &bytes);
-        assert_eq!(res, Err(ByteSliceOutOfBounds));
+        assert!(res.is_err_and(|err| err.kind() == ErrorKind::WriteZero));
     }
 
     #[test]
@@ -89,7 +85,7 @@ mod test {
         let mut buffer = [0u8; 100];
 
         let res = buffer.as_mut_slice().write(98, &bytes);
-        assert_eq!(res, Err(ByteSliceOutOfBounds));
+        assert!(res.is_err_and(|err| err.kind() == ErrorKind::WriteZero));
     }
 
     #[test]
@@ -97,8 +93,10 @@ mod test {
         let bytes = [1, 2, 3, 4, 5];
         let mut buffer = [0u8; 100];
 
-        let res = buffer.as_mut_slice().write(50, &bytes);
-        assert_eq!(res, Ok(()));
+        buffer
+            .as_mut_slice()
+            .write(50, &bytes)
+            .expect("Write should succeed");
         assert_eq!(buffer[50..55], [1, 2, 3, 4, 5]);
     }
 
@@ -107,8 +105,10 @@ mod test {
         let bytes = [1, 2, 3, 4, 5];
         let mut buffer = [0u8; 100];
 
-        let res = buffer.as_mut_slice().write(50, &bytes);
-        assert_eq!(res, Ok(()));
+        buffer
+            .as_mut_slice()
+            .write(50, &bytes)
+            .expect("Write should succeed");
         assert_eq!(buffer[50..55], [1, 2, 3, 4, 5]);
 
         let len = buffer
@@ -123,8 +123,7 @@ mod test {
         let bytes = [1, 2, 3, 4, 5];
         let mut buffer = Box::new([0u8; 100]);
 
-        let res = buffer.write(50, &bytes);
-        assert_eq!(res, Ok(()));
+        buffer.write(50, &bytes).expect("Write should succeed");
         assert_eq!(buffer[50..55], [1, 2, 3, 4, 5]);
 
         let len = BlockDeviceWrite::len(buffer.as_mut_slice())

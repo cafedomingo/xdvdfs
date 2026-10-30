@@ -1,21 +1,17 @@
+use std::io;
+
 /// Trait for read operations on some block device containing an XDVDFS filesystem
 pub trait BlockDeviceRead {
-    type ReadError: core::error::Error + Send + Sync + 'static;
-
-    fn read(&mut self, offset: u64, buffer: &mut [u8]) -> Result<(), Self::ReadError>;
+    fn read(&mut self, offset: u64, buffer: &mut [u8]) -> io::Result<()>;
 }
 
 impl<R> BlockDeviceRead for R
 where
-    R: std::io::Read + std::io::Seek,
+    R: io::Read + io::Seek,
 {
-    type ReadError = std::io::Error;
-
-    fn read(&mut self, offset: u64, buffer: &mut [u8]) -> Result<(), std::io::Error> {
-        self.seek(std::io::SeekFrom::Start(offset))?;
-        std::io::Read::read_exact(self, buffer)?;
-
-        Ok(())
+    fn read(&mut self, offset: u64, buffer: &mut [u8]) -> io::Result<()> {
+        self.seek(io::SeekFrom::Start(offset))?;
+        io::Read::read_exact(self, buffer)
     }
 }
 

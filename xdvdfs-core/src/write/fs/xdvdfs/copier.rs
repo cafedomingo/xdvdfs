@@ -1,8 +1,6 @@
-use core::convert::Infallible;
+use std::io;
 
-use crate::blockdev::{BlockDeviceRead, BlockDeviceWrite, NullBlockDevice};
-
-use super::XDVDFSFilesystemError;
+use crate::blockdev::{BlockDeviceRead, BlockDeviceWrite};
 
 /// Copy specialization for underlying XDVDFSFilesystem block devices
 /// The default implementation of `copy` makes no assumptions about the
@@ -21,7 +19,7 @@ where
         size: u64,
         src: &mut R,
         dest: &mut W,
-    ) -> Result<u64, XDVDFSFilesystemError<R::ReadError, W::WriteError>>;
+    ) -> io::Result<u64>;
 }
 
 /// Default copier specialization, uses the default
@@ -32,19 +30,13 @@ pub struct DefaultCopier<R: ?Sized, W: ?Sized> {
     w_type: core::marker::PhantomData<W>,
 }
 
-impl<R: ?Sized, W: ?Sized> DefaultCopier<R, W> {
-    pub fn with_buffer_size(buffer_size: usize) -> Self {
+impl<R: ?Sized, W: ?Sized> Default for DefaultCopier<R, W> {
+    fn default() -> Self {
         Self {
-            buffer: vec![0u8; buffer_size].into_boxed_slice(),
+            buffer: vec![0u8; 1024 * 1024].into_boxed_slice(),
             r_type: core::marker::PhantomData,
             w_type: core::marker::PhantomData,
         }
-    }
-}
-
-impl<R: ?Sized, W: ?Sized> Default for DefaultCopier<R, W> {
-    fn default() -> Self {
-        Self::with_buffer_size(1024 * 1024)
     }
 }
 
@@ -60,17 +52,15 @@ where
         size: u64,
         src: &mut R,
         dest: &mut W,
-    ) -> Result<u64, XDVDFSFilesystemError<R::ReadError, W::WriteError>> {
+    ) -> io::Result<u64> {
         let buf_size = self.buffer.len() as u64;
         let mut copied = 0;
         while copied < size {
             let to_copy = core::cmp::min(buf_size, size - copied);
             let slice = &mut self.buffer[0..(to_copy as usize)];
 
-            src.read(offset_in + copied, slice)
-                .map_err(XDVDFSFilesystemError::BlockDevReadErr)?;
-            dest.write(offset_out + copied, slice)
-                .map_err(XDVDFSFilesystemError::BlockDevWriteErr)?;
+            src.read(offset_in + copied, slice)?;
+            dest.write(offset_out + copied, slice)?;
             copied += to_copy;
         }
 
@@ -100,8 +90,8 @@ impl<R: ?Sized, W: ?Sized> Default for StdIOCopier<R, W> {
 
 impl<R, W> RWCopier<R, W> for StdIOCopier<R, W>
 where
-    R: BlockDeviceRead<ReadError = std::io::Error> + std::io::Read + std::io::Seek + Sized,
-    W: BlockDeviceWrite<WriteError = std::io::Error> + std::io::Write + std::io::Seek + ?Sized,
+    R: BlockDeviceRead + io::Read + io::Seek + Sized,
+    W: BlockDeviceWrite + io::Write + io::Seek + ?Sized,
 {
     fn copy(
         &mut self,
@@ -110,25 +100,19 @@ where
         size: u64,
         src: &mut R,
         dest: &mut W,
-    ) -> Result<u64, XDVDFSFilesystemError<std::io::Error, std::io::Error>> {
+    ) -> io::Result<u64> {
         use std::io::{Read, SeekFrom};
-        src.seek(SeekFrom::Start(offset_in))
-            .map_err(XDVDFSFilesystemError::BlockDevReadErr)?;
-        dest.seek(SeekFrom::Start(offset_out))
-            .map_err(XDVDFSFilesystemError::BlockDevWriteErr)?;
-
-        // Arbitrarily assign copy errors to the write side,
-        // we can't differentiate them anyway
+        src.seek(SeekFrom::Start(offset_in))?;
+        dest.seek(SeekFrom::Start(offset_out))?;
         std::io::copy(&mut src.by_ref().take(size), dest)
-            .map_err(XDVDFSFilesystemError::BlockDevWriteErr)
     }
 }
 
 impl<R, W> RWCopier<crate::blockdev::OffsetWrapper<R>, W>
     for StdIOCopier<crate::blockdev::OffsetWrapper<R>, W>
 where
-    R: BlockDeviceRead<ReadError = std::io::Error> + std::io::Read + std::io::Seek + Sized,
-    W: BlockDeviceWrite<WriteError = std::io::Error> + std::io::Write + std::io::Seek + ?Sized,
+    R: BlockDeviceRead + io::Read + io::Seek + Sized,
+    W: BlockDeviceWrite + io::Write + io::Seek + ?Sized,
 {
     fn copy(
         &mut self,
@@ -137,55 +121,16 @@ where
         size: u64,
         src: &mut crate::blockdev::OffsetWrapper<R>,
         dest: &mut W,
-    ) -> Result<u64, XDVDFSFilesystemError<std::io::Error, std::io::Error>> {
+    ) -> io::Result<u64> {
         use std::io::{Read, Seek, SeekFrom};
-        src.seek(SeekFrom::Start(offset_in))
-            .map_err(XDVDFSFilesystemError::BlockDevReadErr)?;
-        dest.seek(SeekFrom::Start(offset_out))
-            .map_err(XDVDFSFilesystemError::BlockDevWriteErr)?;
-
-        // Arbitrarily assign copy errors to the write side,
-        // we can't differentiate them anyway
+        src.seek(SeekFrom::Start(offset_in))?;
+        dest.seek(SeekFrom::Start(offset_out))?;
         std::io::copy(&mut src.get_mut().by_ref().take(size), dest)
-            .map_err(XDVDFSFilesystemError::BlockDevWriteErr)
-    }
-}
-
-/// Null copier specialization
-/// Works only on NullBlockDevice, copying is a no-op
-pub struct NullCopier<R: ?Sized> {
-    r_type: core::marker::PhantomData<R>,
-}
-
-impl<R: ?Sized> Default for NullCopier<R> {
-    fn default() -> Self {
-        Self {
-            r_type: core::marker::PhantomData,
-        }
-    }
-}
-
-impl<R> RWCopier<R, NullBlockDevice> for NullCopier<R>
-where
-    R: BlockDeviceRead + ?Sized,
-{
-    fn copy(
-        &mut self,
-        _offset_in: u64,
-        offset_out: u64,
-        size: u64,
-        _src: &mut R,
-        dest: &mut NullBlockDevice,
-    ) -> Result<u64, XDVDFSFilesystemError<R::ReadError, Infallible>> {
-        dest.write_size_adjustment(offset_out, size);
-        Ok(size)
     }
 }
 
 #[cfg(test)]
 mod test {
-    use crate::{blockdev::NullBlockDevice, write::fs::NullCopier};
-
     use super::{DefaultCopier, RWCopier};
 
     #[test]
@@ -194,22 +139,15 @@ mod test {
         let mut src = vec![0xffu8; 20];
         src[0..3].fill(0x2e);
 
-        let mut copier = DefaultCopier::with_buffer_size(5);
+        // Smaller than the copy, so it takes several rounds
+        let mut copier = DefaultCopier {
+            buffer: vec![0; 5].into_boxed_slice(),
+            ..DefaultCopier::default()
+        };
         let res = copier.copy(1, 2, 20 - 2, src.as_mut_slice(), dest.as_mut_slice());
-        assert_eq!(res, Ok(20 - 2));
+        assert_eq!(res.expect("Copy should succeed"), 20 - 2);
         assert_eq!(dest[0..2], [0, 0]);
         assert_eq!(src[1..19], dest[2..]);
-    }
-
-    #[test]
-    fn test_write_xdvdfs_null_copier() {
-        let mut src = vec![0xffu8; 20];
-        let mut dest = NullBlockDevice::default();
-
-        let mut copier = NullCopier::default();
-        let res = copier.copy(1, 2, 20 - 2, src.as_mut_slice(), &mut dest);
-        assert_eq!(res, Ok(20 - 2));
-        assert_eq!(dest.len_blocking(), 20);
     }
 }
 
@@ -246,7 +184,10 @@ mod test_std {
         let mut src = vec![0xffu8; 20 + XDVDFSOffsets::XGD3 as usize];
         src[0..(3 + XDVDFSOffsets::XGD3 as usize)].fill(0x2e);
         let src = Cursor::new(src);
-        let mut src = OffsetWrapper::new_with_provided_offset(src, XDVDFSOffsets::XGD3);
+        let mut src = OffsetWrapper {
+            inner: src,
+            offset: XDVDFSOffsets::XGD3,
+        };
 
         let mut copier = StdIOCopier::default();
         let res = copier.copy(1, 2, 20 - 2, &mut src, &mut dest);
