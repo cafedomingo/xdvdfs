@@ -1,13 +1,19 @@
 use std::{
     borrow::Cow,
-    io::{StdoutLock, Write},
+    fmt,
+    io::{self, Write},
     path::Path,
 };
 
 use xdvdfs::write::{fs::ImagePath, img::ProgressVisitor};
 
+/// Writes progress to stdout. The error is dropped, because a closed stdout
+/// mustn't fail the image or leave a partial unpack.
+pub fn print_progress(args: fmt::Arguments) {
+    let _ = io::stdout().write_fmt(args);
+}
+
 pub struct StdIoProgressReporter<'source> {
-    stdio: StdoutLock<'static>,
     source_prefix: Cow<'source, str>,
     file_count: usize,
     progress_count: usize,
@@ -22,7 +28,6 @@ impl<'source> StdIoProgressReporter<'source> {
         };
 
         Self {
-            stdio: std::io::stdout().lock(),
             source_prefix,
             file_count: 0,
             progress_count: 0,
@@ -38,19 +43,17 @@ impl<'source> ProgressVisitor for StdIoProgressReporter<'source> {
 
     fn directory_added(&mut self, path: &ImagePath, sector: u64) {
         self.progress_count += 1;
-        let _ = writeln!(
-            self.stdio,
-            "[{}/{}] Added dir: {}{path} at sector {sector}",
+        print_progress(format_args!(
+            "[{}/{}] Added dir: {}{path} at sector {sector}\n",
             self.progress_count, self.file_count, self.source_prefix,
-        );
+        ));
     }
 
     fn file_added(&mut self, path: &ImagePath, sector: u64) {
         self.progress_count += 1;
-        let _ = writeln!(
-            self.stdio,
-            "[{}/{}] Added file: {}{path} at sector {sector}",
+        print_progress(format_args!(
+            "[{}/{}] Added file: {}{path} at sector {sector}\n",
             self.progress_count, self.file_count, self.source_prefix,
-        );
+        ));
     }
 }

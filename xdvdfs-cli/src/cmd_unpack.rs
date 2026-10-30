@@ -1,4 +1,5 @@
 use crate::img::{open_image_raw, under_dir};
+use crate::progress::print_progress;
 use anyhow::{anyhow, ensure};
 use clap::Args;
 use std::{
@@ -58,11 +59,11 @@ fn copyout_directory(
         let file_path = dirname.join(&*file_name);
         let is_dir = dirent.node.dirent.is_directory();
 
-        println!(
-            "Extracting {} {}",
+        print_progress(format_args!(
+            "Extracting {} {}\n",
             if is_dir { "directory" } else { "file" },
             file_path.display()
-        );
+        ));
 
         std::fs::create_dir_all(dirname)?;
         if is_dir {

@@ -56,9 +56,11 @@ xdvdfs pack <directory> [optional output path]
 ```
 
 This will create an iso that matches 1-to-1 with the input directory.
+`pack` and `compress` skip the `.DS_Store` files macOS adds to folders.
 The image depends only on the names and contents of the files, so packing them again, or repacking the image, gives the same bytes.
 File names are stored in Windows-1252, one byte per character, so a name can be up to 255 characters and can't use characters outside it, such as those in `日本.txt`.
 Symlinks are followed; a directory symlink that loops is an error. If packing fails, the error names the file at fault and any existing image at the output path is left untouched.
+Neither `pack` nor `compress` creates a missing output folder; the error names the output path.
 
 #### Repacking an Image
 
@@ -104,6 +106,8 @@ Unpacking rejects images with file names that could escape the output directory,
 | `xdvdfs checksum [path to img1]...` | Computes a checksum for all image contents to check integrity against other images |
 | `xdvdfs info <path to image> [path within image]` | Prints metadata info for the specified directory entry, or root volume |
 | `xdvdfs copy-out <path to image> <path within image> <destination path>` | Copies a single file or directory out of the provided image |
+
+`xdvdfs tree game.iso | head` exits 0 quietly, as do `ls`, `md5`, `checksum` and `info`.
 
 ## xdvdfs-core
 

@@ -4,9 +4,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use xdvdfs::blockdev::BlockDeviceRead;
-use xdvdfs::read::DATA_CHUNK_LEN;
 
-use crate::cmd_pack::{check_image_path, output_paths, replace, sync};
+use crate::cmd_pack::{check_image_path, create_partial, output_paths, replace, sync};
 
 /// A FATX file must be under 4 GiB. For CSO this is `ciso.py`'s threshold:
 /// a part ends after the first block that takes it past this size.
@@ -39,9 +38,9 @@ impl SplitOutput {
 
     pub fn create_part(&mut self, n: usize) -> anyhow::Result<BufWriter<File>> {
         let (image_path, partial_path) = output_paths(&self.source, &part_path(&self.base, n))?;
-        let file = File::create(&partial_path)?;
+        let part = create_partial(&image_path, &partial_path)?;
         self.parts.push((image_path, partial_path));
-        Ok(BufWriter::with_capacity(DATA_CHUNK_LEN, file))
+        Ok(part)
     }
 
     /// Syncs `parts`, the writers from `create_part` in order, and renames

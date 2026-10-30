@@ -99,7 +99,8 @@ pub fn cmd_pack(args: &PackArgs) -> Result<(), anyhow::Error> {
         .unwrap_or_else(|| default_image_path(&source_path, is_dir, "iso"))?;
 
     let (image_path, partial_path) = output_paths(&source_path, &image_path)?;
-    if let Err(err) = write_image(&source_path, &meta, &partial_path) {
+    let image = create_partial(&image_path, &partial_path)?;
+    if let Err(err) = write_image(&source_path, &meta, image) {
         // The packing error is the one to report
         let _ = std::fs::remove_file(&partial_path);
         return Err(err);
@@ -123,6 +124,16 @@ pub fn output_paths(
     Ok((image_path, partial_path))
 }
 
+/// Creates the `.partial` file that `image_path` is written to first
+pub fn create_partial(
+    image_path: &Path,
+    partial_path: &Path,
+) -> Result<BufWriter<File>, anyhow::Error> {
+    let file = File::create(partial_path)
+        .with_context(|| format!("Failed to create {}", image_path.display()))?;
+    Ok(BufWriter::with_capacity(DATA_CHUNK_LEN, file))
+}
+
 pub fn replace(partial_path: &Path, image_path: &Path) -> Result<(), anyhow::Error> {
     if let Err(err) = std::fs::rename(partial_path, image_path) {
         let _ = std::fs::remove_file(partial_path);
@@ -144,12 +155,9 @@ pub fn sync(image: BufWriter<File>) -> std::io::Result<()> {
 fn write_image(
     source_path: &Path,
     meta: &Metadata,
-    image_path: &Path,
+    mut image: BufWriter<File>,
 ) -> Result<(), anyhow::Error> {
     let is_dir = meta.is_dir();
-
-    let image = File::create(image_path)?;
-    let mut image = BufWriter::with_capacity(DATA_CHUNK_LEN, image);
 
     let progress_visitor = StdIoProgressReporter::new(source_path, is_dir);
     if is_dir {
