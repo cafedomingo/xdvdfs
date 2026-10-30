@@ -7,15 +7,34 @@ use clap::Args;
 use xdvdfs::read::DATA_CHUNK_LEN;
 use xdvdfs::write::{
     fs::{
-        FilesystemCopier, FilesystemHierarchy, MediaPatchFilesystem, StdFilesystem, StdIOCopier,
+        MediaPatchFilesystem, SkipSystemUpdateFilesystem, StdFilesystem, StdIOCopier,
         XDVDFSFilesystem,
     },
-    img::{ProgressVisitor, create_xdvdfs_image},
+    img::create_xdvdfs_image,
 };
 
 use crate::{img::absolute_path, progress::StdIoProgressReporter};
 
-pub const MEDIA_PATCH_HELP: &str = "Patch each .xbe's media check, as extract-xiso does by default";
+pub const SKIP_SYSTEM_UPDATE_HELP: &str = "Leave out every $SystemUpdate folder";
+
+#[derive(Args)]
+pub struct SourceOptions {
+    #[arg(
+        long,
+        help = "Patch each .xbe's media check, as extract-xiso does by default"
+    )]
+    media_patch: bool,
+
+    #[arg(long, help = SKIP_SYSTEM_UPDATE_HELP)]
+    skip_system_update: bool,
+}
+
+impl SourceOptions {
+    pub fn wrap<F>(&self, fs: F) -> MediaPatchFilesystem<SkipSystemUpdateFilesystem<F>> {
+        let fs = SkipSystemUpdateFilesystem::new(fs, self.skip_system_update);
+        MediaPatchFilesystem::new(fs, self.media_patch)
+    }
+}
 
 #[derive(Args)]
 #[command(about = "Pack an image from a given directory or source ISO image")]
@@ -26,8 +45,8 @@ pub struct PackArgs {
     #[arg(help = "Path to output image")]
     pub image_path: Option<String>,
 
-    #[arg(long, help = MEDIA_PATCH_HELP)]
-    pub media_patch: bool,
+    #[command(flatten)]
+    pub source_options: SourceOptions,
 }
 
 /// The output for `source_path` when none is given: its name with `ext`,
@@ -108,7 +127,7 @@ pub fn cmd_pack(args: &PackArgs) -> Result<(), anyhow::Error> {
 
     let (image_path, partial_path) = output_paths(&source_path, &image_path)?;
     let image = create_partial(&image_path, &partial_path)?;
-    if let Err(err) = write_image(&source_path, &meta, args.media_patch, image) {
+    if let Err(err) = write_image(&source_path, &meta, args, image) {
         // The packing error is the one to report
         let _ = std::fs::remove_file(&partial_path);
         return Err(err);
@@ -163,7 +182,7 @@ pub fn sync(image: BufWriter<File>) -> std::io::Result<()> {
 fn write_image(
     source_path: &Path,
     meta: &Metadata,
-    media_patch: bool,
+    args: &PackArgs,
     mut image: BufWriter<File>,
 ) -> Result<(), anyhow::Error> {
     let is_dir = meta.is_dir();
@@ -171,33 +190,19 @@ fn write_image(
     let progress_visitor = StdIoProgressReporter::new(source_path, is_dir);
     if is_dir {
         let fs = StdFilesystem::create(source_path);
-        pack_from(fs, media_patch, &mut image, progress_visitor)?;
+        let mut fs = args.source_options.wrap(fs);
+        create_xdvdfs_image(&mut fs, &mut image, progress_visitor)?;
     } else if meta.is_file() {
         let source = crate::img::open_image_raw(source_path)?;
         let fs = XDVDFSFilesystem::<_, _, StdIOCopier<_, _>>::new(source)?;
-        pack_from(fs, media_patch, &mut image, progress_visitor)?;
+        let mut fs = args.source_options.wrap(fs);
+        create_xdvdfs_image(&mut fs, &mut image, progress_visitor)?;
     } else {
         bail!("Source must be a directory or an image file");
     }
 
     sync(image)?;
     Ok(())
-}
-
-fn pack_from<F>(
-    mut fs: F,
-    media_patch: bool,
-    image: &mut BufWriter<File>,
-    progress_visitor: impl ProgressVisitor,
-) -> xdvdfs::Result<()>
-where
-    F: FilesystemHierarchy + FilesystemCopier<BufWriter<File>> + FilesystemCopier<[u8]>,
-{
-    if media_patch {
-        create_xdvdfs_image(&mut MediaPatchFilesystem::new(fs), image, progress_visitor)
-    } else {
-        create_xdvdfs_image(&mut fs, image, progress_visitor)
-    }
 }
 
 #[cfg(test)]
