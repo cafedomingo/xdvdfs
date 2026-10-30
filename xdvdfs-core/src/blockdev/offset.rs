@@ -1,8 +1,3 @@
-#[cfg(not(feature = "sync"))]
-use alloc::boxed::Box;
-
-use maybe_async::maybe_async;
-
 use crate::read::VolumeError;
 
 use super::{BlockDeviceRead, BlockDeviceWrite};
@@ -48,8 +43,7 @@ impl<T> OffsetWrapper<T>
 where
     T: BlockDeviceRead + Sized,
 {
-    #[maybe_async]
-    pub async fn new(dev: T) -> Result<Self, VolumeError<T::ReadError>> {
+    pub fn new(dev: T) -> Result<Self, VolumeError<T::ReadError>> {
         let mut s = Self {
             inner: dev,
             offset: XDVDFSOffsets::default(),
@@ -58,7 +52,7 @@ where
         for offset in XDVDFSOffsets::ALL {
             s.offset = offset;
 
-            let vol = crate::read::read_volume(&mut s).await;
+            let vol = crate::read::read_volume(&mut s);
             if vol.is_ok() {
                 return Ok(s);
             }
@@ -84,39 +78,32 @@ where
     }
 }
 
-#[maybe_async]
 impl<T> BlockDeviceRead for OffsetWrapper<T>
 where
     T: BlockDeviceRead,
 {
     type ReadError = T::ReadError;
 
-    async fn read(&mut self, offset: u64, buffer: &mut [u8]) -> Result<(), Self::ReadError> {
-        self.inner
-            .read(offset + u64::from(self.offset), buffer)
-            .await
+    fn read(&mut self, offset: u64, buffer: &mut [u8]) -> Result<(), Self::ReadError> {
+        self.inner.read(offset + u64::from(self.offset), buffer)
     }
 }
 
-#[maybe_async]
 impl<T> BlockDeviceWrite for OffsetWrapper<T>
 where
     T: BlockDeviceRead + BlockDeviceWrite,
 {
     type WriteError = <T as BlockDeviceWrite>::WriteError;
 
-    async fn write(&mut self, offset: u64, buffer: &[u8]) -> Result<(), Self::WriteError> {
-        self.inner
-            .write(offset + u64::from(self.offset), buffer)
-            .await
+    fn write(&mut self, offset: u64, buffer: &[u8]) -> Result<(), Self::WriteError> {
+        self.inner.write(offset + u64::from(self.offset), buffer)
     }
 
-    async fn len(&mut self) -> Result<u64, Self::WriteError> {
-        self.inner.len().await
+    fn len(&mut self) -> Result<u64, Self::WriteError> {
+        self.inner.len()
     }
 }
 
-#[cfg(feature = "std")]
 impl<T> std::io::Seek for OffsetWrapper<T>
 where
     T: BlockDeviceRead + std::io::Seek,
@@ -132,10 +119,8 @@ where
     }
 }
 
-#[cfg(all(test, feature = "write"))]
+#[cfg(test)]
 mod test {
-    use futures::executor::block_on;
-
     use crate::{
         blockdev::{BlockDeviceRead, BlockDeviceWrite, XDVDFSOffsets},
         layout::{DirectoryEntryTable, DiskRegion, VolumeDescriptor},
@@ -154,7 +139,7 @@ mod test {
         let mut fs = SectorLinearBlockFilesystem::new(MemoryFilesystem::default());
         let image = SectorLinearImage::new(&slbd, &mut fs);
 
-        let res = block_on(OffsetWrapper::new(image)).err();
+        let res = OffsetWrapper::new(image).err();
         assert_eq!(res, Some(VolumeError::InvalidVolume));
     }
 
@@ -169,15 +154,18 @@ mod test {
         let volume = volume
             .serialize()
             .expect("Volume serialization should succeed");
-        block_on(slbd.write(32 * 2048, &volume)).expect("Write should succeed");
+        slbd.write(32 * 2048, &volume)
+            .expect("Write should succeed");
 
         let image = SectorLinearImage::new(&slbd, &mut fs);
         let mut wrapper =
-            block_on(OffsetWrapper::new(image)).expect("Offset wrapper creation should succeed");
+            OffsetWrapper::new(image).expect("Offset wrapper creation should succeed");
         assert_eq!(wrapper.get_offset() as u64, 0);
 
         let mut vol_read = [0u8; 2048];
-        block_on(wrapper.read(32 * 2048, &mut vol_read)).expect("Volume read should succeed");
+        wrapper
+            .read(32 * 2048, &mut vol_read)
+            .expect("Volume read should succeed");
         assert_eq!(volume, vol_read);
     }
 
@@ -194,15 +182,18 @@ mod test {
             .expect("Volume serialization should succeed");
 
         let xgd1_volume_header_offset = 405798912 + 32 * 2048;
-        block_on(slbd.write(xgd1_volume_header_offset, &volume)).expect("Write should succeed");
+        slbd.write(xgd1_volume_header_offset, &volume)
+            .expect("Write should succeed");
 
         let image = SectorLinearImage::new(&slbd, &mut fs);
         let mut wrapper =
-            block_on(OffsetWrapper::new(image)).expect("Offset wrapper creation should succeed");
+            OffsetWrapper::new(image).expect("Offset wrapper creation should succeed");
         assert_eq!(wrapper.get_offset(), XDVDFSOffsets::XGD1);
 
         let mut vol_read = [0u8; 2048];
-        block_on(wrapper.read(32 * 2048, &mut vol_read)).expect("Volume read should succeed");
+        wrapper
+            .read(32 * 2048, &mut vol_read)
+            .expect("Volume read should succeed");
         assert_eq!(volume, vol_read);
     }
 
@@ -219,15 +210,18 @@ mod test {
             .expect("Volume serialization should succeed");
 
         let xgd2_volume_header_offset = 265879552 + 32 * 2048;
-        block_on(slbd.write(xgd2_volume_header_offset, &volume)).expect("Write should succeed");
+        slbd.write(xgd2_volume_header_offset, &volume)
+            .expect("Write should succeed");
 
         let image = SectorLinearImage::new(&slbd, &mut fs);
         let mut wrapper =
-            block_on(OffsetWrapper::new(image)).expect("Offset wrapper creation should succeed");
+            OffsetWrapper::new(image).expect("Offset wrapper creation should succeed");
         assert_eq!(wrapper.get_offset(), XDVDFSOffsets::XGD2);
 
         let mut vol_read = [0u8; 2048];
-        block_on(wrapper.read(32 * 2048, &mut vol_read)).expect("Volume read should succeed");
+        wrapper
+            .read(32 * 2048, &mut vol_read)
+            .expect("Volume read should succeed");
         assert_eq!(volume, vol_read);
     }
 
@@ -244,15 +238,18 @@ mod test {
             .expect("Volume serialization should succeed");
 
         let xgd3_volume_header_offset = 34078720 + 32 * 2048;
-        block_on(slbd.write(xgd3_volume_header_offset, &volume)).expect("Write should succeed");
+        slbd.write(xgd3_volume_header_offset, &volume)
+            .expect("Write should succeed");
 
         let image = SectorLinearImage::new(&slbd, &mut fs);
         let mut wrapper =
-            block_on(OffsetWrapper::new(image)).expect("Offset wrapper creation should succeed");
+            OffsetWrapper::new(image).expect("Offset wrapper creation should succeed");
         assert_eq!(wrapper.get_offset(), XDVDFSOffsets::XGD3);
 
         let mut vol_read = [0u8; 2048];
-        block_on(wrapper.read(32 * 2048, &mut vol_read)).expect("Volume read should succeed");
+        wrapper
+            .read(32 * 2048, &mut vol_read)
+            .expect("Volume read should succeed");
         assert_eq!(volume, vol_read);
     }
 
@@ -264,20 +261,22 @@ mod test {
         let mut wrapper = OffsetWrapper::new_with_provided_offset(image, XDVDFSOffsets::XGD1);
 
         let data = [1, 2, 3, 4, 5];
-        block_on(wrapper.write(2048, &data)).expect("Write should succeed");
+        wrapper.write(2048, &data).expect("Write should succeed");
 
         let mut buffer = [0u8; 2048];
-        block_on(wrapper.get_mut().read(405800960, &mut buffer)).expect("Read should succeed");
+        wrapper
+            .get_mut()
+            .read(405800960, &mut buffer)
+            .expect("Read should succeed");
         assert_eq!(buffer[0..5], data);
 
-        let len = block_on(wrapper.len()).expect("Reading length should work");
+        let len = wrapper.len().expect("Reading length should work");
         assert_eq!(len, 405803008);
     }
 }
 
-#[cfg(all(test, feature = "std"))]
+#[cfg(test)]
 mod test_std {
-    use alloc::vec::Vec;
     use std::io::{Cursor, Seek, SeekFrom};
 
     use crate::blockdev::XDVDFSOffsets;

@@ -46,8 +46,6 @@ impl<'a> PathRef<'a> {
                 base.join(tail)
             }
             other => {
-                use alloc::string::ToString;
-
                 // Trim the `/` to ensure path is relative.
                 let path = other.to_string();
                 debug_assert!(path.starts_with('/'));
@@ -74,14 +72,11 @@ mod test {
 
     #[test]
     fn test_pathref_to_pathvec_join() {
-        use alloc::borrow::ToOwned;
-
         let path = "/hello/world";
         let path: PathRef = path.into();
         let path = path.join("abc");
         let path: super::PathVec = path.into();
-        let components: alloc::vec::Vec<alloc::string::String> =
-            path.iter().map(|x| x.to_owned()).collect();
+        let components: Vec<String> = path.iter().map(|x| x.to_owned()).collect();
 
         assert_eq!(components, &["hello", "world", "abc"]);
     }

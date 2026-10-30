@@ -1,12 +1,6 @@
-use alloc::collections::BTreeSet;
-use alloc::vec::Vec;
+use std::collections::BTreeSet;
 
 use thiserror::Error;
-
-#[cfg(not(feature = "sync"))]
-use alloc::boxed::Box;
-
-use maybe_async::maybe_async;
 
 use crate::blockdev::{BlockDeviceRead, BlockDeviceWrite};
 use crate::layout::DirectoryEntryNode;
@@ -60,9 +54,8 @@ where
     W: BlockDeviceWrite + ?Sized,
     Copier: RWCopier<D, W>,
 {
-    #[maybe_async]
-    pub async fn new(mut dev: D) -> Option<XDVDFSFilesystem<D, W, Copier>> {
-        let volume = crate::read::read_volume(&mut dev).await;
+    pub fn new(mut dev: D) -> Option<XDVDFSFilesystem<D, W, Copier>> {
+        let volume = crate::read::read_volume(&mut dev);
 
         if let Ok(volume) = volume {
             Some(Self {
@@ -79,16 +72,15 @@ where
     }
 }
 
-#[maybe_async]
 impl<D, W, Copier> FilesystemHierarchy for XDVDFSFilesystem<D, W, Copier>
 where
     D: BlockDeviceRead + Sized,
     W: BlockDeviceWrite + ?Sized,
-    Copier: RWCopier<D, W> + Send + Sync,
+    Copier: RWCopier<D, W>,
 {
     type Error = DirectoryTableLookupError<D::ReadError>;
 
-    async fn read_dir(&mut self, dir: PathRef<'_>) -> Result<Vec<FileEntry>, Self::Error> {
+    fn read_dir(&mut self, dir: PathRef<'_>) -> Result<Vec<FileEntry>, Self::Error> {
         let (dirtab, cache_node) = if dir.is_root() {
             (self.volume.root_table, &mut self.dirent_cache)
         } else {
@@ -111,9 +103,9 @@ where
             (dirtab, node)
         };
 
-        let mut tree = dirtab.scan_dirent_tree(&mut self.dev).await?;
+        let mut tree = dirtab.scan_dirent_tree(&mut self.dev)?;
         let mut entries = Vec::new();
-        while let Some(dirent) = tree.next_entry().await? {
+        while let Some(dirent) = tree.next_entry()? {
             let name_str = dirent.name_str()?;
             cache_node.insert_tail(&name_str, dirent);
             entries.push(FileEntry {
@@ -146,7 +138,7 @@ where
         Ok(entries)
     }
 
-    async fn clear_cache(&mut self) -> Result<(), Self::Error> {
+    fn clear_cache(&mut self) -> Result<(), Self::Error> {
         self.dirent_cache = PathPrefixTree::default();
         self.table_paths = TableRanges::default();
 
@@ -154,16 +146,15 @@ where
     }
 }
 
-#[maybe_async]
 impl<D, W, Copier> FilesystemCopier<W> for XDVDFSFilesystem<D, W, Copier>
 where
     D: BlockDeviceRead + Sized,
     W: BlockDeviceWrite + ?Sized,
-    Copier: RWCopier<D, W> + Send + Sync,
+    Copier: RWCopier<D, W>,
 {
     type Error = XDVDFSFilesystemError<D::ReadError, W::WriteError>;
 
-    async fn copy_file_in(
+    fn copy_file_in(
         &mut self,
         src: PathRef<'_>,
         dest: &mut W,
@@ -189,16 +180,13 @@ where
             .offset(input_offset)
             .map_err(DirectoryTableLookupError::SizeOutOfBounds)
             .map_err(XDVDFSFilesystemError::FilesystemReadErr)?;
-        let copied = self
-            .copier
-            .copy(
-                input_offset,
-                output_offset,
-                size_to_copy,
-                &mut self.dev,
-                dest,
-            )
-            .await?;
+        let copied = self.copier.copy(
+            input_offset,
+            output_offset,
+            size_to_copy,
+            &mut self.dev,
+            dest,
+        )?;
         if copied < size_to_copy {
             return Err(XDVDFSFilesystemError::TruncatedFile(src.into()));
         }
@@ -209,8 +197,6 @@ where
 
 #[cfg(test)]
 mod test {
-    use alloc::vec::Vec;
-    use futures::executor::block_on;
     use std::io::Cursor;
 
     use crate::{
@@ -242,7 +228,7 @@ mod test {
     /// An 0xff-filled image of `sectors` sectors with a one-sector root table.
     fn blank_image(sectors: u32) -> Vec<u8> {
         let root = DirectoryEntryTable::new(SECTOR_SIZE, ROOT_SECTOR);
-        let mut img = alloc::vec![0xff; sector_at(sectors)];
+        let mut img = vec![0xff; sector_at(sectors)];
         let volume = VolumeDescriptor::new(root).serialize().unwrap();
         img[sector_at(VOLUME_SECTOR)..][..volume.len()].copy_from_slice(&volume);
         img
@@ -283,17 +269,17 @@ mod test {
     }
 
     fn open(img: Cursor<Vec<u8>>) -> XDVDFSFilesystem<Cursor<Vec<u8>>, NullBlockDevice> {
-        block_on(XDVDFSFilesystem::new(img)).expect("xdvdfs filesystem init should succeed")
+        XDVDFSFilesystem::new(img).expect("xdvdfs filesystem init should succeed")
     }
 
     #[test]
     fn test_read_dir_grandchild_loop() {
         let mut fs = open(image_with_tables(&[&[("a", 1)], &[("b", 1)]]));
 
-        block_on(fs.read_dir("/".into())).expect("Root read should succeed");
-        block_on(fs.read_dir("/a".into())).expect("/a read should succeed");
-        block_on(fs.read_dir("/a".into())).expect("/a reread should succeed");
-        let res = block_on(fs.read_dir("/a/b".into()));
+        fs.read_dir("/".into()).expect("Root read should succeed");
+        fs.read_dir("/a".into()).expect("/a read should succeed");
+        fs.read_dir("/a".into()).expect("/a reread should succeed");
+        let res = fs.read_dir("/a/b".into());
         assert!(
             matches!(res, Err(DirectoryTableLookupError::Loop)),
             "{res:?}"
@@ -308,9 +294,9 @@ mod test {
             &[],
         ]));
 
-        block_on(fs.read_dir("/".into())).expect("Root read should succeed");
-        block_on(fs.read_dir("/a".into())).expect("/a read should succeed");
-        let res = block_on(fs.read_dir("/b".into()));
+        fs.read_dir("/".into()).expect("Root read should succeed");
+        fs.read_dir("/a".into()).expect("/a read should succeed");
+        let res = fs.read_dir("/b".into());
         assert!(
             matches!(res, Err(DirectoryTableLookupError::Loop)),
             "{res:?}"
@@ -328,18 +314,13 @@ mod test {
 
             // Distinct names, since each table's scan runs over the later sectors too
             let leaf = DiskRegion { sector: 0, size: 0 };
-            put_dir(
-                &mut img,
-                sector_at(sector),
-                &alloc::format!("x{sector}"),
-                leaf,
-            );
+            put_dir(&mut img, sector_at(sector), &format!("x{sector}"), leaf);
         }
         let mut fs = open(Cursor::new(img));
 
-        block_on(fs.read_dir("/".into())).expect("Root read should succeed");
-        block_on(fs.read_dir("/a".into())).expect("/a read should succeed");
-        let res = block_on(fs.read_dir("/b".into()));
+        fs.read_dir("/".into()).expect("Root read should succeed");
+        fs.read_dir("/a".into()).expect("/a read should succeed");
+        let res = fs.read_dir("/b".into());
         assert!(
             matches!(res, Err(DirectoryTableLookupError::Loop)),
             "{res:?}"
@@ -353,7 +334,7 @@ mod test {
         tables.push(&[]);
         let mut fs = open(image_with_tables(&tables));
 
-        let res = block_on(dir_tree(&mut fs, &mut |_| {}));
+        let res = dir_tree(&mut fs, &mut |_| {});
         assert!(
             matches!(&res, Err(DirectoryTableLookupError::DuplicateName(name)) if name == "a"),
             "{:?}",
@@ -367,7 +348,7 @@ mod test {
         let mut slbdfs = SectorLinearBlockFilesystem::new(memfs);
         let slbd = SectorLinearBlockDevice::default();
         let img = SectorLinearImage::new(&slbd, &mut slbdfs);
-        let fs = block_on(XDVDFSFilesystem::<_, NullBlockDevice, DefaultCopier<_, _>>::new(img));
+        let fs = XDVDFSFilesystem::<_, NullBlockDevice, DefaultCopier<_, _>>::new(img);
 
         assert!(fs.is_none());
     }
@@ -380,18 +361,13 @@ mod test {
         let mut slbdfs = SectorLinearBlockFilesystem::new(memfs);
         let mut slbd = SectorLinearBlockDevice::default();
 
-        block_on(create_xdvdfs_image(
-            &mut slbdfs,
-            &mut slbd,
-            NoOpProgressVisitor,
-        ))
-        .expect("Image creation should succeed");
+        create_xdvdfs_image(&mut slbdfs, &mut slbd, NoOpProgressVisitor)
+            .expect("Image creation should succeed");
         let img = SectorLinearImage::new(&slbd, &mut slbdfs);
-        let mut fs =
-            block_on(XDVDFSFilesystem::<_, NullBlockDevice, DefaultCopier<_, _>>::new(img))
-                .expect("xdvdfs filesystem init should succeed");
+        let mut fs = XDVDFSFilesystem::<_, NullBlockDevice, DefaultCopier<_, _>>::new(img)
+            .expect("xdvdfs filesystem init should succeed");
 
-        let dir = block_on(fs.read_dir("/".into())).expect("Root read should succeed");
+        let dir = fs.read_dir("/".into()).expect("Root read should succeed");
         assert_eq!(
             dir,
             &[FileEntry {
@@ -401,7 +377,7 @@ mod test {
             },]
         );
 
-        let dir = block_on(fs.read_dir("/a".into())).expect("/a read should succeed");
+        let dir = fs.read_dir("/a".into()).expect("/a read should succeed");
         assert_eq!(
             dir,
             &[
@@ -418,7 +394,9 @@ mod test {
             ]
         );
 
-        let dir = block_on(fs.read_dir("/a/b".into())).expect("/a/b read should succeed");
+        let dir = fs
+            .read_dir("/a/b".into())
+            .expect("/a/b read should succeed");
         assert_eq!(
             dir,
             &[FileEntry {
@@ -437,20 +415,18 @@ mod test {
         let mut slbdfs = SectorLinearBlockFilesystem::new(memfs);
         let mut slbd = SectorLinearBlockDevice::default();
 
-        block_on(create_xdvdfs_image(
-            &mut slbdfs,
-            &mut slbd,
-            NoOpProgressVisitor,
-        ))
-        .expect("Image creation should succeed");
+        create_xdvdfs_image(&mut slbdfs, &mut slbd, NoOpProgressVisitor)
+            .expect("Image creation should succeed");
         let img = SectorLinearImage::new(&slbd, &mut slbdfs);
-        let mut fs = block_on(XDVDFSFilesystem::<_, [u8], DefaultCopier<_, _>>::new(img))
+        let mut fs = XDVDFSFilesystem::<_, [u8], DefaultCopier<_, _>>::new(img)
             .expect("xdvdfs filesystem init should succeed");
 
         // The cache must be populated by `read_dir` before the copier can access files
-        block_on(fs.read_dir("/".into())).expect("Root read should succeed");
-        block_on(fs.read_dir("/a".into())).expect("/a read should succeed");
-        let dir = block_on(fs.read_dir("/a/b".into())).expect("/a/b read should succeed");
+        fs.read_dir("/".into()).expect("Root read should succeed");
+        fs.read_dir("/a".into()).expect("/a read should succeed");
+        let dir = fs
+            .read_dir("/a/b".into())
+            .expect("/a/b read should succeed");
         assert_eq!(
             dir,
             &[FileEntry {
@@ -461,7 +437,7 @@ mod test {
         );
 
         let mut buf = [0u8; 9];
-        let copied = block_on(fs.copy_file_in("/a/b/c".into(), &mut buf, 4, 2, 7));
+        let copied = fs.copy_file_in("/a/b/c".into(), &mut buf, 4, 2, 7);
         assert_eq!(copied, Ok(7));
         assert_eq!(&buf, b"\0\0o World");
     }
@@ -474,19 +450,17 @@ mod test {
         let mut slbdfs = SectorLinearBlockFilesystem::new(memfs);
         let mut slbd = SectorLinearBlockDevice::default();
 
-        block_on(create_xdvdfs_image(
-            &mut slbdfs,
-            &mut slbd,
-            NoOpProgressVisitor,
-        ))
-        .expect("Image creation should succeed");
+        create_xdvdfs_image(&mut slbdfs, &mut slbd, NoOpProgressVisitor)
+            .expect("Image creation should succeed");
         let img = SectorLinearImage::new(&slbd, &mut slbdfs);
-        let mut fs = block_on(XDVDFSFilesystem::<_, [u8], DefaultCopier<_, _>>::new(img))
+        let mut fs = XDVDFSFilesystem::<_, [u8], DefaultCopier<_, _>>::new(img)
             .expect("xdvdfs filesystem init should succeed");
 
-        block_on(fs.read_dir("/".into())).expect("Root read should succeed");
-        block_on(fs.read_dir("/a".into())).expect("/a read should succeed");
-        let dir = block_on(fs.read_dir("/a/b".into())).expect("/a/b read should succeed");
+        fs.read_dir("/".into()).expect("Root read should succeed");
+        fs.read_dir("/a".into()).expect("/a read should succeed");
+        let dir = fs
+            .read_dir("/a/b".into())
+            .expect("/a/b read should succeed");
         assert_eq!(
             dir,
             &[FileEntry {
@@ -496,7 +470,7 @@ mod test {
             },]
         );
 
-        let res = block_on(fs.clear_cache());
+        let res = fs.clear_cache();
         assert_eq!(res, Ok(()));
         assert_eq!(fs.dirent_cache.get("a"), None);
     }

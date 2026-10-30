@@ -6,13 +6,13 @@ use super::{
 };
 
 pub struct JoinedPathRefIter<'a> {
-    joined_component_stack: alloc::vec::Vec<&'a str>,
+    joined_component_stack: Vec<&'a str>,
     base_iter: BasePathRefIter<'a>,
 }
 
 impl<'a> JoinedPathRefIter<'a> {
     pub fn new(base: &'a PathRef<'a>, tail: &'a str) -> Self {
-        let mut stack = alloc::vec::Vec::new();
+        let mut stack = Vec::new();
         stack.push(tail);
 
         let mut base = base;
@@ -63,27 +63,21 @@ mod test {
 
     #[test]
     fn test_pathref_iter_join_single() {
-        use alloc::borrow::ToOwned;
-
         let path = "/hello";
         let path: PathRef = path.into();
         let path = path.join("world");
-        let components: alloc::vec::Vec<alloc::string::String> =
-            path.iter().map(|x| x.to_owned()).collect();
+        let components: Vec<String> = path.iter().map(|x| x.to_owned()).collect();
 
         assert_eq!(components, &["hello", "world"]);
     }
 
     #[test]
     fn test_pathref_iter_join_depth() {
-        use alloc::borrow::ToOwned;
-
         let path = "/hello";
         let path: PathRef = path.into();
         let path = path.join("world");
         let path = path.join("abc");
-        let components: alloc::vec::Vec<alloc::string::String> =
-            path.iter().map(|x| x.to_owned()).collect();
+        let components: Vec<String> = path.iter().map(|x| x.to_owned()).collect();
 
         assert_eq!(components, &["hello", "world", "abc"]);
     }

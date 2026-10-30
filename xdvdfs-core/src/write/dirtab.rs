@@ -4,8 +4,6 @@ use crate::layout::{
 use crate::write::avl;
 use crate::write::fs::PathVec;
 
-use alloc::vec::Vec;
-
 use super::avl::AvlNode;
 use super::sector::{required_sectors, SectorAllocator};
 use super::FileStructureError;
@@ -309,9 +307,6 @@ impl<'alloc> AvlDirectoryEntryTableWriter<'alloc> {
 
 #[cfg(test)]
 mod test {
-    use alloc::string::String;
-    use alloc::vec::Vec;
-
     use crate::{
         layout::{DirectoryEntryDiskNode, NameEncodingError},
         write::{
@@ -461,9 +456,9 @@ mod test {
         let name_bytes = "HelloWorld".as_bytes();
 
         // Initial len + sizeof(node) + sizeof(name)
-        let mut buffer = alloc::vec![0xff; 2048 + 0xe + 10];
+        let mut buffer = vec![0xff; 2048 + 0xe + 10];
         assert!(serialize_dirent_disk_node(&mut buffer[2048..], node, name_bytes).is_ok());
-        assert_eq!(&buffer[0..2048], alloc::vec![0xff; 2048]);
+        assert_eq!(&buffer[0..2048], vec![0xff; 2048]);
         assert_eq!(&buffer[2048..(2048 + 0xe)], node.serialize().unwrap());
         assert_eq!(&buffer[(2048 + 0xe)..], name_bytes);
     }
@@ -486,9 +481,9 @@ mod test {
         let name_bytes = "HelloWorlds".as_bytes();
 
         // Initial len + sizeof(node) + sizeof(name) + 4-byte alignment
-        let mut buffer = alloc::vec![0xff; 2048 + 0xe + 11 + 3];
+        let mut buffer = vec![0xff; 2048 + 0xe + 11 + 3];
         assert!(serialize_dirent_disk_node(&mut buffer[2048..], node, name_bytes).is_ok());
-        assert_eq!(&buffer[0..2048], alloc::vec![0xff; 2048]);
+        assert_eq!(&buffer[0..2048], vec![0xff; 2048]);
         assert_eq!(&buffer[2048..(2048 + 0xe)], node.serialize().unwrap());
         assert_eq!(&buffer[(2048 + 0xe)..(2048 + 0xe + 11)], name_bytes);
         assert_eq!(&buffer[(2048 + 0xe + 11)..], &[0xff, 0xff, 0xff]);
@@ -540,10 +535,7 @@ mod test {
 
         // Add 103 files with name length '6'
         // Each dirent is of length 20, with a total over 2048
-        let names: Vec<String> = (0..103)
-            .into_iter()
-            .map(|i| alloc::format!("{i:06}"))
-            .collect();
+        let names: Vec<String> = (0..103).into_iter().map(|i| format!("{i:06}")).collect();
         for name in &names {
             assert_eq!(writer.add_file(name, 10), Ok(()));
         }
@@ -567,7 +559,7 @@ mod test {
         assert!(res.is_ok());
 
         // Empty tables are '0xff' filled
-        assert_eq!(buffers.dirtab_bytes, alloc::vec![0xffu8; 2048]);
+        assert_eq!(buffers.dirtab_bytes, vec![0xffu8; 2048]);
         assert!(writer.iter().next().is_none());
     }
 
@@ -588,7 +580,7 @@ mod test {
             &[0, 0, 0, 0, 33, 0, 0, 0, 10, 0, 0, 0, 32, 4,]
         );
         assert_eq!(&buffers.dirtab_bytes[0xe..(0xe + 4)], "test".as_bytes());
-        assert_eq!(&buffers.dirtab_bytes[(0xe + 4)..], &alloc::vec![0xff; 2030]);
+        assert_eq!(&buffers.dirtab_bytes[(0xe + 4)..], &vec![0xff; 2030]);
 
         let file_listing: Vec<_> = writer.iter().collect();
         assert_eq!(
@@ -622,7 +614,7 @@ mod test {
             ]
         );
         assert_eq!(&buffers.dirtab_bytes[0xe..(0xe + 4)], "test".as_bytes());
-        assert_eq!(&buffers.dirtab_bytes[(0xe + 4)..], &alloc::vec![0xff; 2030]);
+        assert_eq!(&buffers.dirtab_bytes[(0xe + 4)..], &vec![0xff; 2030]);
 
         let file_listing: Vec<_> = writer.iter().collect();
         assert_eq!(
@@ -697,10 +689,7 @@ mod test {
 
         // Add 103 files with name length '6'
         // Each dirent is of length 20, with a total over 2048
-        let names: Vec<String> = (0..103)
-            .into_iter()
-            .map(|i| alloc::format!("{i:06}"))
-            .collect();
+        let names: Vec<String> = (0..103).into_iter().map(|i| format!("{i:06}")).collect();
         for name in &names {
             assert_eq!(writer.add_file(name, 10), Ok(()));
         }
@@ -715,7 +704,7 @@ mod test {
         let aligned_entry_offset: usize = entry_size * 102;
         assert_eq!(
             &buffers.dirtab_bytes[aligned_entry_offset..(aligned_entry_offset + 8)],
-            &alloc::vec![0xff; 8]
+            &vec![0xff; 8]
         );
     }
 

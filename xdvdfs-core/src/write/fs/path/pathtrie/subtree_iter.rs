@@ -1,5 +1,3 @@
-use alloc::boxed::Box;
-
 use super::subtree::PPTSubtree;
 use super::PathPrefixTree;
 
@@ -8,7 +6,7 @@ pub enum PPTSubtreeIter<'a, T> {
     SingleChar(char, Option<&'a PathPrefixTree<T>>),
     CharArray {
         index: u8,
-        children: alloc::collections::vec_deque::Iter<'a, Option<Box<PathPrefixTree<T>>>>,
+        children: std::collections::vec_deque::Iter<'a, Option<Box<PathPrefixTree<T>>>>,
     },
 }
 
@@ -58,9 +56,7 @@ impl<'a, T> Iterator for PPTSubtreeIter<'a, T> {
 
 #[cfg(test)]
 mod test {
-    use alloc::boxed::Box;
-    use alloc::collections::VecDeque;
-    use alloc::vec::Vec;
+    use std::collections::VecDeque;
 
     use crate::write::fs::{path::pathtrie::subtree::PPTSubtree, PathPrefixTree};
 

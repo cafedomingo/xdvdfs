@@ -235,8 +235,6 @@ case_cmp_test!(test_layout_dirent_name_cmp, |a, b| {
 
 #[cfg(test)]
 mod test {
-    use alloc::string::String;
-
     use crate::layout::NameEncodingError;
 
     use super::DirentName;

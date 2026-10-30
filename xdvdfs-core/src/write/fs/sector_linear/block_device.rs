@@ -5,8 +5,6 @@ use crate::{
     layout,
     write::fs::{PathRef, PathVec},
 };
-use alloc::boxed::Box;
-use maybe_async::maybe_async;
 
 /// Contents for a region of the sector linear block device
 /// The sector offset is specified as the key in the contents tree,
@@ -67,7 +65,7 @@ impl SectorLinearBlockRegion {
 
 #[derive(Clone, Debug, Default)]
 pub struct SectorLinearBlockDevice {
-    pub(super) contents: alloc::collections::BTreeMap<u64, SectorLinearBlockRegion>,
+    pub(super) contents: std::collections::BTreeMap<u64, SectorLinearBlockRegion>,
 }
 
 impl SectorLinearBlockDevice {
@@ -138,11 +136,10 @@ impl SectorLinearBlockDevice {
     }
 }
 
-#[maybe_async]
 impl BlockDeviceWrite for SectorLinearBlockDevice {
     type WriteError = Infallible;
 
-    async fn write(&mut self, offset: u64, buffer: &[u8]) -> Result<(), Infallible> {
+    fn write(&mut self, offset: u64, buffer: &[u8]) -> Result<(), Infallible> {
         let sector = offset / layout::SECTOR_SIZE as u64;
 
         let offset = offset % layout::SECTOR_SIZE as u64;
@@ -169,7 +166,7 @@ impl BlockDeviceWrite for SectorLinearBlockDevice {
         Ok(())
     }
 
-    async fn len(&mut self) -> Result<u64, Infallible> {
+    fn len(&mut self) -> Result<u64, Infallible> {
         Ok(self.size())
     }
 }
@@ -212,7 +209,7 @@ mod test {
     #[test]
     fn test_sector_linear_dev_size_end_raw_data() {
         let mut slbd = SectorLinearBlockDevice::default();
-        let data = alloc::vec![0; 4096].into_boxed_slice();
+        let data = vec![0; 4096].into_boxed_slice();
         slbd.contents
             .insert(5, SectorLinearBlockRegion::RawData(data));
         assert_eq!(slbd.size(), 7 * 2048);
@@ -262,7 +259,7 @@ mod test {
         let mut slbd = SectorLinearBlockDevice::default();
         slbd.contents.insert(
             5,
-            SectorLinearBlockRegion::RawData(alloc::vec![0; 2048].into_boxed_slice()),
+            SectorLinearBlockRegion::RawData(vec![0; 2048].into_boxed_slice()),
         );
         assert_eq!(slbd.num_sectors(), 6);
     }
@@ -317,11 +314,8 @@ mod test {
         use crate::blockdev::BlockDeviceWrite;
 
         let mut slbd = SectorLinearBlockDevice::default();
-        futures::executor::block_on(async {
-            slbd.write(2048, &[1, 2, 3, 4, 5])
-                .await
-                .expect("write should succeed");
-        });
+        slbd.write(2048, &[1, 2, 3, 4, 5])
+            .expect("write should succeed");
 
         assert_eq!(slbd.get(0), SectorLinearBlockSectorContents::Fill(0));
         let SectorLinearBlockSectorContents::RawData(data) = slbd.get(1) else {
@@ -336,10 +330,8 @@ mod test {
         use crate::blockdev::BlockDeviceWrite;
 
         let mut slbd = SectorLinearBlockDevice::default();
-        let data = alloc::vec![10; 2048 * 2];
-        futures::executor::block_on(async {
-            slbd.write(2048, &data).await.expect("write should succeed");
-        });
+        let data = vec![10; 2048 * 2];
+        slbd.write(2048, &data).expect("write should succeed");
 
         assert_eq!(slbd.get(0), SectorLinearBlockSectorContents::Fill(0));
         let SectorLinearBlockSectorContents::RawData(data) = slbd.get(1) else {
@@ -359,11 +351,9 @@ mod test {
         use crate::blockdev::BlockDeviceWrite;
 
         let mut slbd = SectorLinearBlockDevice::default();
-        let data = alloc::vec![10; 2048];
-        futures::executor::block_on(async {
-            slbd.write(4096, &data).await.expect("write should succeed");
-            slbd.write(2048, &data).await.expect("write should succeed");
-        });
+        let data = vec![10; 2048];
+        slbd.write(4096, &data).expect("write should succeed");
+        slbd.write(2048, &data).expect("write should succeed");
 
         assert_eq!(slbd.get(0), SectorLinearBlockSectorContents::Fill(0));
         let SectorLinearBlockSectorContents::RawData(data) = slbd.get(1) else {
@@ -410,8 +400,7 @@ mod test {
             },
         );
 
-        let result: alloc::vec::Vec<(u64, &SectorLinearBlockRegion)> =
-            slbd.sector_range(5..=9).collect();
+        let result: Vec<(u64, &SectorLinearBlockRegion)> = slbd.sector_range(5..=9).collect();
         assert_eq!(
             result,
             &[
@@ -472,8 +461,7 @@ mod test {
             },
         );
 
-        let result: alloc::vec::Vec<(u64, &SectorLinearBlockRegion)> =
-            slbd.sector_range(5..=9).collect();
+        let result: Vec<(u64, &SectorLinearBlockRegion)> = slbd.sector_range(5..=9).collect();
         assert_eq!(
             result,
             &[
@@ -548,8 +536,7 @@ mod test {
             },
         );
 
-        let result: alloc::vec::Vec<(u64, &SectorLinearBlockRegion)> =
-            slbd.sector_range(..9).collect();
+        let result: Vec<(u64, &SectorLinearBlockRegion)> = slbd.sector_range(..9).collect();
         assert_eq!(
             result,
             &[
@@ -624,8 +611,7 @@ mod test {
             },
         );
 
-        let result: alloc::vec::Vec<(u64, &SectorLinearBlockRegion)> =
-            slbd.sector_range(5..).collect();
+        let result: Vec<(u64, &SectorLinearBlockRegion)> = slbd.sector_range(5..).collect();
         assert_eq!(
             result,
             &[
@@ -700,8 +686,7 @@ mod test {
             },
         );
 
-        let result: alloc::vec::Vec<(u64, &SectorLinearBlockRegion)> =
-            slbd.sector_range(4..).collect();
+        let result: Vec<(u64, &SectorLinearBlockRegion)> = slbd.sector_range(4..).collect();
         assert_eq!(
             result,
             &[
@@ -769,7 +754,7 @@ mod test {
             },
         );
 
-        let result: alloc::vec::Vec<(u64, &SectorLinearBlockRegion)> = slbd
+        let result: Vec<(u64, &SectorLinearBlockRegion)> = slbd
             .sector_range((Bound::Excluded(5), Bound::Included(9)))
             .collect();
         assert_eq!(
@@ -832,7 +817,7 @@ mod test {
             },
         );
 
-        let result: alloc::vec::Vec<(u64, &SectorLinearBlockRegion)> = slbd
+        let result: Vec<(u64, &SectorLinearBlockRegion)> = slbd
             .sector_range((Bound::Excluded(4), Bound::Included(9)))
             .collect();
         assert_eq!(

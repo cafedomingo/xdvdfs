@@ -5,7 +5,6 @@ use std::{
 
 use anyhow::bail;
 use clap::Args;
-use maybe_async::maybe_async;
 
 use xdvdfs::{
     blockdev,
@@ -36,19 +35,17 @@ type BufFileSectorLinearFs<'a> = write::fs::SectorLinearBlockFilesystem<
     >,
 >;
 
-#[maybe_async]
 impl ciso::split::SplitFilesystem<std::io::Error, BufFile> for SplitStdFs {
-    async fn create_file(&mut self, name: &std::ffi::OsStr) -> Result<BufFile, std::io::Error> {
+    fn create_file(&mut self, name: &std::ffi::OsStr) -> Result<BufFile, std::io::Error> {
         let file = std::fs::File::create(name)?;
         let bf: BufFile = std::io::BufWriter::new(file);
         Ok(bf)
     }
 
-    async fn close(&mut self, _: BufFile) {}
+    fn close(&mut self, _: BufFile) {}
 }
 
-#[maybe_async]
-pub async fn cmd_compress(args: &CompressArgs) -> Result<(), anyhow::Error> {
+pub fn cmd_compress(args: &CompressArgs) -> Result<(), anyhow::Error> {
     let source_path = absolute_path(Path::new(&args.source_path))?;
     let meta = std::fs::metadata(&source_path)?;
     let is_dir = meta.is_dir();
@@ -93,25 +90,22 @@ pub async fn cmd_compress(args: &CompressArgs) -> Result<(), anyhow::Error> {
         let mut slbd = write::fs::SectorLinearBlockDevice::default();
         let mut slbfs = write::fs::SectorLinearBlockFilesystem::new(&mut fs);
 
-        write::img::create_xdvdfs_image(&mut slbfs, &mut slbd, progress_callback).await?;
+        write::img::create_xdvdfs_image(&mut slbfs, &mut slbd, progress_callback)?;
 
         let mut input = write::fs::SectorLinearImage::new(&slbd, &mut slbfs);
-        ciso::write::write_ciso_image(&mut input, &mut output, progress_callback_compression)
-            .await?;
+        ciso::write::write_ciso_image(&mut input, &mut output, progress_callback_compression)?;
     } else if meta.is_file() {
-        let source = open_image_raw(&source_path).await?;
+        let source = open_image_raw(&source_path)?;
         let mut fs = write::fs::XDVDFSFilesystem::new(source)
-            .await
             .ok_or(anyhow::anyhow!("Failed to create XDVDFS filesystem"))?;
 
         let mut slbd = write::fs::SectorLinearBlockDevice::default();
         let mut slbfs: BufFileSectorLinearFs = write::fs::SectorLinearBlockFilesystem::new(&mut fs);
 
-        write::img::create_xdvdfs_image(&mut slbfs, &mut slbd, progress_callback).await?;
+        write::img::create_xdvdfs_image(&mut slbfs, &mut slbd, progress_callback)?;
 
         let mut input = write::fs::SectorLinearImage::new(&slbd, &mut slbfs);
-        ciso::write::write_ciso_image(&mut input, &mut output, progress_callback_compression)
-            .await?;
+        ciso::write::write_ciso_image(&mut input, &mut output, progress_callback_compression)?;
     } else {
         bail!("Source must be a directory or an image file");
     }

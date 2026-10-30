@@ -1,6 +1,5 @@
-use alloc::borrow::Cow;
-use alloc::string::String;
 use encoding_rs::WINDOWS_1252;
+use std::borrow::Cow;
 use thiserror::Error;
 
 use super::{is_safe_name, DirectoryEntryDiskNode};

@@ -36,7 +36,7 @@ impl VolumeDescriptor {
         self.magic0 == VOLUME_HEADER_MAGIC && self.magic1 == VOLUME_HEADER_MAGIC
     }
 
-    pub fn serialize(&self) -> Result<alloc::vec::Vec<u8>, bincode::Error> {
+    pub fn serialize(&self) -> Result<Vec<u8>, bincode::Error> {
         bincode::DefaultOptions::new()
             .with_fixint_encoding()
             .with_little_endian()

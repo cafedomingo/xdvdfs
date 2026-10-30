@@ -1,7 +1,5 @@
 use core::cmp::Ordering;
 
-use alloc::vec::Vec;
-
 #[repr(i8)]
 #[derive(Copy, Clone)]
 enum AvlDirection {
