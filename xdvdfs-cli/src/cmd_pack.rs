@@ -1,4 +1,4 @@
-use std::fs::File;
+use std::fs::{File, Metadata};
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 
@@ -98,7 +98,14 @@ pub fn cmd_pack(args: &PackArgs) -> Result<(), anyhow::Error> {
         .map(Ok)
         .unwrap_or_else(|| default_image_path(&source_path, is_dir, "iso"))?;
 
-    cmd_pack_path(&source_path, &image_path)
+    let (image_path, partial_path) = output_paths(&source_path, &image_path)?;
+    if let Err(err) = write_image(&source_path, &meta, &partial_path) {
+        // The packing error is the one to report
+        let _ = std::fs::remove_file(&partial_path);
+        return Err(err);
+    }
+
+    replace(&partial_path, &image_path)
 }
 
 /// The file that writing `image_path` replaces, and the `.partial` file to
@@ -134,26 +141,11 @@ pub fn sync(image: BufWriter<File>) -> std::io::Result<()> {
         .sync_all()
 }
 
-pub fn cmd_pack_path(source_path: &Path, image_path: &Path) -> Result<(), anyhow::Error> {
-    let (image_path, partial_path) = output_paths(source_path, image_path)?;
-    pack_into(source_path, &partial_path)?;
-    replace(&partial_path, &image_path)
-}
-
-/// Packs `source_path` into a new file at `image_path`, and removes that file
-/// if packing fails.
-pub fn pack_into(source_path: &Path, image_path: &Path) -> Result<(), anyhow::Error> {
-    let result = write_image(source_path, image_path);
-    if result.is_err() {
-        // The packing error is the one to report
-        let _ = std::fs::remove_file(image_path);
-    }
-
-    result
-}
-
-fn write_image(source_path: &Path, image_path: &Path) -> Result<(), anyhow::Error> {
-    let meta = std::fs::metadata(source_path)?;
+fn write_image(
+    source_path: &Path,
+    meta: &Metadata,
+    image_path: &Path,
+) -> Result<(), anyhow::Error> {
     let is_dir = meta.is_dir();
 
     let image = File::create(image_path)?;

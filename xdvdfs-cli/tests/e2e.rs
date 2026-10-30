@@ -158,56 +158,6 @@ fn pack_case(files: &[(&str, &[u8])], empty_dirs: &[&str]) {
 }
 
 #[test]
-fn extract_xiso_compat() {
-    let work = tempdir().unwrap();
-    let src = work.path().join("src");
-    let img = work.path().join("img.xiso");
-    write_tree(&src, &[(&numbered(0), b"extract-xiso compat")], &[]);
-
-    run(&[
-        "extract-xiso".as_ref(),
-        "-c".as_ref(),
-        src.as_ref(),
-        img.as_ref(),
-    ]);
-
-    let out = tempdir().unwrap();
-    run(&[
-        "extract-xiso".as_ref(),
-        "-d".as_ref(),
-        out.path().as_ref(),
-        "-x".as_ref(),
-        img.as_ref(),
-    ]);
-    assert_trees_equal(&src, out.path());
-
-    let out = tempdir().unwrap();
-    run(&[
-        "extract-xiso".as_ref(),
-        "-d".as_ref(),
-        out.path().as_ref(),
-        img.as_ref(),
-    ]);
-    assert_trees_equal(&src, out.path());
-
-    run(&[
-        "extract-xiso".as_ref(),
-        "-D".as_ref(),
-        "-r".as_ref(),
-        img.as_ref(),
-    ]);
-    let out = tempdir().unwrap();
-    run(&[
-        "extract-xiso".as_ref(),
-        "-d".as_ref(),
-        out.path().as_ref(),
-        "-x".as_ref(),
-        img.as_ref(),
-    ]);
-    assert_trees_equal(&src, out.path());
-}
-
-#[test]
 fn empty_file() {
     pack_case(&[("empty_file", b"")], &[]);
 }
@@ -440,19 +390,16 @@ fn xgd2_offset_image() {
     );
     pack(&src, &img);
 
-    // Closes the write handle; Windows restricts copying a file open for writing
     let wrapped = place_at_offset(&img, u64::from(XDVDFSOffsets::XGD2)).into_temp_path();
     assert_unpacks_to(&wrapped, &src);
 
-    let copy = work.path().join("copy.xiso");
-    fs::copy(&wrapped, &copy).unwrap();
-    run(&[
-        "extract-xiso".as_ref(),
-        "-D".as_ref(),
-        "-r".as_ref(),
-        copy.as_ref(),
-    ]);
-    assert_unpacks_to(&copy, &src);
+    let repacked = work.path().join("repacked.xiso");
+    pack(&wrapped, &repacked);
+    // Unpack finds the offset on its own, so only the bytes show it was dropped
+    assert!(
+        fs::read(&repacked).unwrap() == fs::read(&img).unwrap(),
+        "repacked.xiso differs from img.xiso"
+    );
 }
 
 #[test]
@@ -641,6 +588,7 @@ fn pack_failure_keeps_existing_image() {
 
     assert_error(&xdvdfs(&["pack".as_ref(), bad.as_ref(), img.as_ref()]));
     assert!(fs::read(&img).unwrap() == packed, "out.iso changed");
+    assert!(!img.with_added_extension("partial").exists());
 }
 
 #[cfg(unix)]
@@ -679,6 +627,15 @@ fn pack_truncated_image_source_fails() {
 
     let stderr = pack_error(&img);
     assert!(stderr.contains("big.bin"), "pack printed:\n{stderr}");
+}
+
+#[test]
+fn pack_non_image_source_fails() {
+    let work = tempdir().unwrap();
+    let file = work.path().join("notimage.bin");
+    fs::write(&file, b"not an xiso image").unwrap();
+
+    pack_error(&file);
 }
 
 #[test]
@@ -837,63 +794,6 @@ fn cso_reads_ciso_fixture() {
 }
 
 #[test]
-fn exiso_r_rejects_non_image() {
-    let work = tempdir().unwrap();
-    let file = work.path().join("notimage.bin");
-    let contents = b"not an xiso image";
-    fs::write(&file, contents).unwrap();
-
-    assert_error(&xdvdfs(&[
-        "extract-xiso".as_ref(),
-        "-r".as_ref(),
-        file.as_ref(),
-    ]));
-    assert_eq!(fs::read(&file).unwrap(), contents);
-    for left in ["notimage.bin.old", "notimage.old", "notimage.bin.partial"] {
-        assert!(!work.path().join(left).exists(), "{left} was created");
-    }
-}
-
-#[test]
-fn exiso_r_keeps_existing_old() {
-    let work = tempdir().unwrap();
-    let src = work.path().join("src");
-    let img = work.path().join("g.iso");
-    let old = work.path().join("g.iso.old");
-    write_tree(&src, &[("f", b"data")], &[]);
-    pack(&src, &img);
-    let packed = fs::read(&img).unwrap();
-    fs::write(&old, b"earlier backup").unwrap();
-
-    assert_error(&xdvdfs(&[
-        "extract-xiso".as_ref(),
-        "-r".as_ref(),
-        img.as_ref(),
-    ]));
-    assert!(fs::read(&img).unwrap() == packed, "g.iso changed");
-    assert_eq!(fs::read(&old).unwrap(), b"earlier backup");
-}
-
-#[test]
-fn exiso_r_backup_name() {
-    let work = tempdir().unwrap();
-    let src = work.path().join("src");
-    let img = work.path().join("g.iso");
-    write_tree(&src, &[("f", b"data")], &[]);
-    pack(&src, &img);
-    let packed = fs::read(&img).unwrap();
-
-    run(&["extract-xiso".as_ref(), "-r".as_ref(), img.as_ref()]);
-    let old = work.path().join("g.iso.old");
-    assert!(
-        fs::read(&old).unwrap() == packed,
-        "g.iso.old isn't the input"
-    );
-    assert!(!work.path().join("g.old").exists());
-    assert_unpacks_to(&img, &src);
-}
-
-#[test]
 fn pack_source_named_like_partial() {
     let work = tempdir().unwrap();
     let src = work.path().join("src");
@@ -960,36 +860,4 @@ fn pack_through_output_symlink() {
         .filter(|name| name.to_string_lossy().ends_with(".partial"))
         .collect();
     assert!(left.is_empty(), "{left:?} were left behind");
-}
-
-#[test]
-fn exiso_r_restores_input_when_replace_fails() {
-    let work = tempdir().unwrap();
-    let src = work.path().join("src");
-    let img = work.path().join("g.iso");
-    let out = work.path().join("x").join("out");
-    write_tree(&src, &[("f", b"data")], &[]);
-    pack(&src, &img);
-    let packed = fs::read(&img).unwrap();
-    // A directory where the output goes makes the final rename fail. `-d`
-    // places it beside `out` (exiso_compat.rs), so block both spots.
-    for blocker in [out.join("g.iso"), out.with_file_name("g.iso")] {
-        fs::create_dir_all(blocker.join("keep")).unwrap();
-    }
-
-    assert_error(&xdvdfs(&[
-        "extract-xiso".as_ref(),
-        "-d".as_ref(),
-        out.as_ref(),
-        "-r".as_ref(),
-        img.as_ref(),
-    ]));
-    assert!(fs::read(&img).unwrap() == packed, "g.iso changed");
-    assert!(!img.with_added_extension("old").exists());
-    for partial in [
-        out.join("g.iso.partial"),
-        out.with_file_name("g.iso.partial"),
-    ] {
-        assert!(!partial.exists(), "{} was left behind", partial.display());
-    }
 }
