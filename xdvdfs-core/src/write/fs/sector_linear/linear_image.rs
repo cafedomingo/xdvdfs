@@ -1,10 +1,10 @@
 use core::ops::{Deref, DerefMut};
 use std::io;
 
+use crate::Error;
 use crate::blockdev::BlockDeviceRead;
 use crate::layout;
 use crate::write::fs::{FilesystemCopier, SectorLinearBlockDevice, SectorLinearBlockFilesystem};
-use crate::Error;
 
 use super::SectorLinearBlockRegion;
 

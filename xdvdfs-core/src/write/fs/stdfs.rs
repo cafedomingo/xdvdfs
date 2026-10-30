@@ -176,11 +176,11 @@ mod test {
     use std::io::{Cursor, Write};
 
     use crate::{
+        Error,
         write::fs::{
             FileEntry, FileType, FilesystemCopier, FilesystemHierarchy, ImagePath,
             SectorLinearBlockDevice, SectorLinearBlockFilesystem, SectorLinearImage,
         },
-        Error,
     };
 
     use super::StdFilesystem;

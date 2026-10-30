@@ -14,6 +14,8 @@ Prebuilt binaries are on the [Releases page](https://github.com/cafedomingo/xdvd
 cargo install --git https://github.com/cafedomingo/xdvdfs xdvdfs-cli
 ```
 
+Building from source needs Rust 1.99 or later.
+
 ### Usage
 
 Running `xdvdfs` with no args will bring up the help screen, showing supported subcommands:

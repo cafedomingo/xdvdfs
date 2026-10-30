@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use clap::{ArgAction, Parser, Subcommand};
 
 use crate::img::absolute_path;
@@ -129,7 +129,7 @@ fn exiso_create(dir: &String, file: &Option<String>, rest: &[String]) -> anyhow:
 }
 
 fn exiso_list(xiso_list: &Vec<String>) -> anyhow::Result<()> {
-    use crate::cmd_read::{cmd_tree, TreeArgs};
+    use crate::cmd_read::{TreeArgs, cmd_tree};
     for xiso in xiso_list {
         cmd_tree(&TreeArgs {
             image_path: xiso.clone(),
@@ -140,7 +140,7 @@ fn exiso_list(xiso_list: &Vec<String>) -> anyhow::Result<()> {
 }
 
 fn exiso_extract(xiso_list: &Vec<String>, directory: &Option<String>) -> anyhow::Result<()> {
-    use crate::cmd_unpack::{cmd_unpack, UnpackArgs};
+    use crate::cmd_unpack::{UnpackArgs, cmd_unpack};
     for xiso in xiso_list {
         cmd_unpack(&UnpackArgs {
             image_path: xiso.clone(),

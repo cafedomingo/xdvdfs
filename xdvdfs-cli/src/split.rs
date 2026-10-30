@@ -159,7 +159,7 @@ mod test {
 
     use xdvdfs::blockdev::BlockDeviceRead;
 
-    use super::{part_path, SplitFileReader, SplitOutput};
+    use super::{SplitFileReader, SplitOutput, part_path};
 
     #[test]
     fn test_split_output_two_parts() {

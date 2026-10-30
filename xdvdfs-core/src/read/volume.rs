@@ -1,8 +1,8 @@
 use std::io;
 
-use crate::blockdev::BlockDeviceRead;
-use crate::layout::{VolumeDescriptor, SECTOR_SIZE_U64, SECTOR_SIZE_USZ};
 use crate::Error;
+use crate::blockdev::BlockDeviceRead;
+use crate::layout::{SECTOR_SIZE_U64, SECTOR_SIZE_USZ, VolumeDescriptor};
 
 /// Read the XDVDFS volume descriptor from sector 32 of the drive.
 /// Errors with `InvalidVolume` if the device is too short to hold one or it
@@ -29,16 +29,16 @@ mod test {
     use std::io;
 
     use crate::{
+        Error,
         blockdev::{BlockDeviceRead, BlockDeviceWrite, OffsetWrapper},
         layout::{
-            DirectoryEntryTable, DiskRegion, VolumeDescriptor, SECTOR_SIZE_U64, VOLUME_HEADER_MAGIC,
+            DirectoryEntryTable, DiskRegion, SECTOR_SIZE_U64, VOLUME_HEADER_MAGIC, VolumeDescriptor,
         },
         read::read_volume,
         write::fs::{
             MemoryFilesystem, SectorLinearBlockDevice, SectorLinearBlockFilesystem,
             SectorLinearImage,
         },
-        Error,
     };
 
     #[test]
